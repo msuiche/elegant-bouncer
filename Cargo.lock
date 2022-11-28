@@ -221,6 +221,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "212d0f5754cb6769937f4501cc0e67f4f4483c8d2c3e1e922ee9edbe4ab4c7c0"
 
 [[package]]
+name = "elegant-bouncer"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+ "clap",
+ "colored",
+ "env_logger",
+ "log",
+ "lopdf",
+]
+
+[[package]]
 name = "encoding"
 version = "0.2.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -465,18 +477,6 @@ name = "os_str_bytes"
 version = "6.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b5bf27447411e9ee3ff51186bf7a08e16c341efdde93f4d823e8844429bed7e"
-
-[[package]]
-name = "pdf-scanner"
-version = "0.1.0"
-dependencies = [
- "byteorder",
- "clap",
- "colored",
- "env_logger",
- "log",
- "lopdf",
-]
 
 [[package]]
 name = "pom"
