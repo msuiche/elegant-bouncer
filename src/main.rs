@@ -1,5 +1,3 @@
-
-
 //
 //  Copyright (c) Matt Suiche. All rights reserved.
 //
@@ -10,8 +8,40 @@
 //  ELEGANTBOUNCER JBIG2/PDF scanner for FORCEDENTRY
 //
 // Author:
-//  Matthieu Suiche (msuiche) 20-Nov-2022
+//  Matt Suiche (msuiche) 20-Nov-2022
 //
+
+/*
+read the main stream..
+*** variables ***
+nRefSegs              = 0x20002
+numSyms               = 0x2
+readTextRegionSeg: syms                    @ 0x138727d50 with size 0x10
+readTextRegionSeg: pageBitmap              = 0x138727ea0 (0x150 bytes after syms)
+readTextRegionSeg: pageBitmap->data        = 0x1387279f0 (0x4b0 bytes before pageBitmap)
+readTextRegionSeg: codeTables              = 0x138727ec0 (0x170 bytes away from syms)
+readTextRegionSeg: segments                = 0x1499082a0 (0x111e0550 bytes away from syms)
+readTextRegionSeg: segments->data          = 0x138727da0 (0x50 bytes away from syms)
+readTextRegionSeg: globalSegments          = 0x149908280 (0x111e0530 bytes away from syms)
+readTextRegionSeg: refSegs                 = 0x130018000
+*** distance ***
+segments->data    is 0x50 bytes after syms
+pageBitmap        is 0x150 bytes after syms
+pageBitmap->data  is 0xfffffffffffffca0 bytes after syms
+pageBitmap        is 0x4b0 bytes after pageBitmap->data
+data_buffer_to_bitmap:   0x4b0
+data_buffer_to_segments: 0x3b0
+(...)
+readProfilesSeg (debug_sg)
+pageBitmap: (readProfilesSeg)
+0x138727ea0: 0x000000014990c780 (w = 0x7fffffff, h = 0x7fffffff)
+0x138727ea8: 0x7fffffff4990c780 (w = 0x7fffffff, h = 0x7fffffff)
+0x138727eb0: 0xffffffff7fffffff (w = 0x7fffffff, h = 0x7fffffff)
+0x138727eb8: 0x00000001387279f0 (w = 0x7fffffff, h = 0x7fffffff)
+0x138727ec0: 0x0000000149908420 (w = 0x7fffffff, h = 0x7fffffff)
+0x138727ec8: 0x0000000000000000 (w = 0x7fffffff, h = 0x7fffffff)
+
+*/
 
 use std::fmt;
 use std::path;
