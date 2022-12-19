@@ -1,7 +1,7 @@
 # ELEGANTBOUNCER
 ![alt text](logo.png) 
 
-Just some playground experimental tool for detection of the FORCEDENTRY (CVE-2021-30860) exploit inside PDF files.
+Just some playground experimental tool for detection of the FORCEDENTRY (CVE-2021-30860) exploit inside PDF files. The full [write-up can be found here](https://www.magnetforensics.com/blog/researching-forcedentry-detecting-the-exploit-with-no-samples/).
 
 ## Getting started
 ```
