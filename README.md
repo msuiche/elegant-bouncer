@@ -1,38 +1,67 @@
-# ELEGANTBOUNCER
-![alt text](logo.png) 
+![alt text](banner.png) 
 
-Just some playground experimental tool for detection of the FORCEDENTRY (CVE-2021-30860) exploit inside PDF files. The full [write-up can be found here](https://www.magnetforensics.com/blog/researching-forcedentry-detecting-the-exploit-with-no-samples/).
+# ELEGANTBOUNCER
+ELEGANTBOUNCER is a detection tool for file-based mobile exploits.
+
+It employs an innovative approach for advanced file-based threat identification, eliminating the need for in-the-wild samples and outperforming traditional methods based on regular expressions or IOCs. At present, it primarily targets the identification of mobile vulnerabilities such as FORCEDENTRY (CVE-2021-30860) and BLASTPASS (CVE-2023-4863, CVE-2023-41064).
+
+## Support Table
+| Threat Name  | CVEs                            | Supported          |
+|--------------|---------------------------------|--------------------|
+| FORCEDENTRY  | CVE-2021-30860                  | :white_check_mark: |
+| BLASTDOOR    | CVE-2023-4863, CVE-2023-41064   | :white_check_mark: |
+
+
+### Learn more
+- [FORCEDENTRY](documentation/FORCEDENTRY.md)
+- [BLASTPASS](documentation/BLASTPASS.md)
 
 ## Getting started
 ```
-elegant-bouncer v0.1
-ELEGANTBOUNCER JBIG2/PDF scanner for FORCEDENTRY (CVE-2021-30860)
-A small utility to check the presence of known malicious payloads in PDF files.
+elegant-bouncer v0.2
+ELEGANTBOUNCER Detection Tool
+Detection tool for file-based mobile exploits.
 
-A program that analyzes PDF files for malformed JBIG2 objects, such as the ones used in FORCEDENTRY
+A utility designed to detect the presence of known mobile APTs in commonly distributed files.
 
 Usage: elegant-bouncer [OPTIONS] <Input file>
 
 Arguments:
-  <Input file>  Path to the input PDF file
+  <Input file>
+          Path to the input file
 
 Options:
-  -v, --verbose  Print extra output while parsing
-  -a, --analyze  Check if there are any exploited known vulnerabilities
-  -c, --create   Create a FORCEDENTRY-like PDF
-  -h, --help     Print help information
-  -V, --version  Print version information
-  ```
-### analyze
-`--analyze` can be used to analyze a PDF file, it checks if there is the int overflow trigger for CVE-2021-30860.
+  -v, --verbose
+          Print extra output while parsing
 
-### create
-`--create` is used to create a PDF file from scratch to exploit CVE-2021-30860. WIP.
+  -s, --scan
+          Assess a given file, checking for known vulnerabilities
 
-# References
-- [xpdf-v4.03](https://src.fedoraproject.org/repo/pkgs/xpdf/xpdf-4.03.tar.gz/)
-- [NSO Group iMessage Zero-Click Exploit Captured in the Wild](https://citizenlab.ca/2021/09/forcedentry-nso-group-imessage-zero-click-exploit-captured-in-the-wild/)
-- [A deep dive into an NSO zero-click iMessage exploit: Remote Code Execution](https://googleprojectzero.blogspot.com/2021/12/a-deep-dive-into-nso-zero-click.html)
-- [FORCEDENTRY: Sandbox Escape](https://googleprojectzero.blogspot.com/2022/03/forcedentry-sandbox-escape.html)
-- [@jeffssh POC for CVE-2021-30860 (Part 1)](https://twitter.com/jeffssh/status/1474605696020881409) [Part 2](https://github.com/jeffssh/exploits/tree/main/CVE-2021-30860)
-- [JBIG2 ISO/IEC 14492](https://github.com/agl/jbig2enc/blob/master/fcd14492.pdf)
+  -c, --create-forcedentry
+          Create a FORCEDENTRY-like PDF
+
+  -h, --help
+          Print help information (use `-h` for a summary)
+
+  -V, --version
+          Print version information
+```
+### scan
+Use `--scan` to assess a given file, checking for known vulnerabilities.
+
+### create-forcedentry
+Use `--create-forcedentry` to generate a PDF from the ground up designed to exploit CVE-2021-30860. Work in progress.
+
+Note: Pre-made samples can be found in the [`samples/`](samples/) directory.
+
+## Recommendations
+Use [**Lockdown Mode**](https://support.apple.com/en-us/HT212650) to decrease your attack surface if you think you are a person of interest.
+
+## Acknowledgements
+- Apple Security Engineering and Architecture (SEAR)
+- [Bill Marczack](https://twitter.com/@billmarczak)
+- [Jeff](https://twitter.com/jeffssh/status/1474605696020881409) for helping me understand FORCEDENTRY
+- [Valentina](https://twitter.com/chompie1337) for suggesting this target
+- [Ian Beer](https://twitter.com/i41nbeer) and [Samuel Groß](https://twitter.com/5aelo) of Google Project Zero for their amazing write-up on the sample shared by Citizen Lab with them.
+- [@mistymntncop](https://twitter.com/mistymntncop) for our exchanges and his work on [CVE-2023-4863](https://github.com/mistymntncop/CVE-2023-4863)
+- [Ben Hawkes](https://blog.isosceles.com/the-webp-0day/)
