@@ -538,34 +538,5 @@ pub fn scan_webp_vp8l_file(path: &path::Path) -> Result<ScanResultStatus> {
         }
     }
 
-    /*
-    let mut count = [0, 1, 1, 1, 1, 1, 0, 0, 0, 11, 5, 1, 10, 4, 2, 2];
-
-    let mut code_lengths_counts: [[u32; 16]; 5] = [
-        [0, 1, 1, 0, 0, 0, 0, 0, 0, 3, 229, 41,  1, 1, 1, 2], // 280
-        [0, 1, 1, 0, 0, 0, 0, 0, 0, 7, 241,  1,  1, 1, 1, 2], // 256
-        [0, 1, 1, 0, 0, 0, 0, 0, 0, 7, 241,  1,  1, 1, 1, 2], // 256
-        [0, 1, 1, 0, 0, 0, 0, 0, 0, 7, 241,  1,  1, 1, 1, 2], // 256
-        [0, 1, 1, 1, 1, 1, 0, 0, 0, 11, 5, 1, 10, 4, 2, 2 ],  //  40
-    ];
-
-    // let blastpass = is_code_lengths_count_valid(&count.to_vec(), MAX_DISTANCE_TABLE_SIZE);
-    // analyze_huffman_table(&mut code_lengths_counts[0], K_TABLE_SIZE[0] - FIXED_TABLE_SIZE);
-    
-    let mut idx = 0;
-    for code_lengths_count in &mut code_lengths_counts {
-        let max_table_size = match idx {
-            0 => K_TABLE_SIZE[0] - FIXED_TABLE_SIZE,
-            1 | 2 | 3 => MAX_RBA_TABLE_SIZE,
-            4 => MAX_DISTANCE_TABLE_SIZE,
-            _ => panic!("Unhandled idx value: {}", idx),
-        };
-        
-        let blastpass = is_code_lengths_count_valid(&code_lengths_count.to_vec(), max_table_size);
-        info!("[{}] = {}", idx, blastpass);
-        idx += 1;
-    }
-    */
-
     Ok(status)
 }
