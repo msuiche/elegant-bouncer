@@ -52,7 +52,7 @@ const CRATE_VERSION: &'static str =
 const CRATE_VERSION: &'static str = "0.2";
 
 #[derive(Parser)]
-#[clap(about, long_about = "A utility designed to detect the presence of known mobile APTs in commonly distributed files.", author="Copyright (c) 2022, All rights reserved.", version = CRATE_VERSION)]
+#[clap(about, long_about = "A utility designed to detect the presence of known mobile APTs in commonly distributed files.", author="Copyright (c) 2022-2023, Matt Suiche (@msuiche)", version = CRATE_VERSION)]
 struct Args {
     /// Print extra output while parsing
     #[clap(short, long)]
@@ -136,10 +136,10 @@ fn print_hashes(filename: &str) -> io::Result<()> {
 }
 
 fn main() -> Result<()> {
-    println!("{} v{}", "elegant-bouncer".bold(), CRATE_VERSION);
-    println!("{} Detection Tool", "ELEGANTBOUNCER".green());
-    println!("Detection tool for file-based mobile exploits.");
-    // println!("Supported CVEs: CVE-2021-30860, CVE-2023-4863, CVE-2023-41064");
+    println!("{} v{} - Detection tool for file-based mobile exploits.", "ELEGANTBOUNCER".green(), CRATE_VERSION);
+    println!("> https://github.com/msuiche/elegant-bouncer");
+    println!("Copyright (c) 2022-2023, Matt Suiche (@msuiche)");
+    println!("> https://www.msuiche.com");
     println!("");
 
     let args = Args::parse();
