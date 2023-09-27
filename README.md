@@ -11,6 +11,7 @@ It employs an innovative approach for advanced file-based threat identification,
 | FORCEDENTRY  | CVE-2021-30860                  | :white_check_mark: |
 | BLASTDOOR    | CVE-2023-4863, CVE-2023-41064   | :white_check_mark: |
 
+![output of the detection tool](./documentation/elegantbouncer.png)
 
 ### Learn more
 - [FORCEDENTRY](documentation/FORCEDENTRY.md)

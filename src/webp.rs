@@ -524,7 +524,7 @@ pub fn scan_webp_vp8l_file(path: &path::Path) -> Result<ScanResultStatus> {
             }
 
             let max_table_size = match j {
-                0 => K_TABLE_SIZE[0] - FIXED_TABLE_SIZE,
+                0 => K_TABLE_SIZE[color_cache_bits as usize] - FIXED_TABLE_SIZE,
                 1 | 2 | 3 => MAX_RBA_TABLE_SIZE,
                 4 => MAX_DISTANCE_TABLE_SIZE,
                 _ => panic!("Unhandled idx value: {}", j),
