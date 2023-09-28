@@ -44,8 +44,8 @@ The majority of the data within the VP8L chunk is encoded using a canonical pref
 
 The format outlines two methodologies for coding the prefix code lengths, defined by a single bit value:
 
-- If the bit is 1: it indicates a simple code length code.
-- If the bit is 0: it implies a normal code length code.
+- [If the bit is 1](https://github.com/webmproject/libwebp/blob/902bc9190331343b2017211debcec8d2ab87e17a/src/dec/vp8l_dec.c#L329): it indicates a simple code length code.
+- [If the bit is 0](https://github.com/webmproject/libwebp/blob/902bc9190331343b2017211debcec8d2ab87e17a/src/dec/vp8l_dec.c#L341): it implies a normal code length code.
 Regardless of the method employed, the format permits the presence of unused code lengths within the stream.
 
 This discussion will center on the normal code length code. Here, the code lengths are encoded using prefix codes, necessitating an initial reading of lower-level code lengths (code_length_code_lengths).
