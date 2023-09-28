@@ -176,19 +176,6 @@ impl HTree {
 
     pub fn next(&self, d: &mut VP8LBitReader) -> Result<u32, HuffmanError> {
         // Read enough bits so that we can use the look-up table.
-        /*
-        if d.bit_offset < LUT_SIZE {
-            if d.bit_offset < d.data.len() {
-                let c = d.data[d.idx];
-                println!("c = {:x} (d.bit_offset = {}, d.bits = {})\n",
-                    c, d.bit_offset, d.bits);
-                d.idx += 1;
-                d.bits |= u32::from(c) << d.bit_offset;
-                d.bit_offset += 8;
-            } else {
-                return self.slow_path(n, d);
-            }
-        }*/
 
         let bits = d.read_bits(LUT_SIZE as u8).unwrap();
         // println!("bits = {}", bits);
@@ -204,7 +191,6 @@ impl HTree {
             }
             assert!(b <= LUT_SIZE);
             // println!("(before) b = {} / d.bit_offset = {}", b, d.bit_offset);
-            // d.bits >>= b - 1;
             b -= 1;
             if (LUT_SIZE - b) > d.bit_offset {
                 d.bit_offset = (8 + d.bit_offset % 8) - (LUT_SIZE - b);
@@ -212,12 +198,9 @@ impl HTree {
             } else {
                 d.bit_offset -= LUT_SIZE - b;
             }
-            // println!("(after) b = {} / d.bit_offset = {}", b, d.bit_offset);
             return Ok(n >> 8);
         }
         n >>= 8;
-        // d.bits >>= LUT_SIZE;
-        // d.bit_offset -= LUT_SIZE;
         if LUT_SIZE > d.bit_offset {
             d.bit_offset = (8 + d.bit_offset % 8) - LUT_SIZE;
             d.idx -= 1;
@@ -229,23 +212,6 @@ impl HTree {
 
     fn slow_path(&self, n: u32, _d: &mut VP8LBitReader) -> Result<u32, HuffmanError> {
         assert!(self.nodes[n as usize].children == LEAF_NODE);
-        /*while self.nodes[n as usize].children != LEAF_NODE {
-            println!("slow path triggered!!!");
-            if d.bit_offset == 0 {
-                if d.idx < d.data.len() {
-                    let c = d.data[d.idx];
-                    d.idx += 1;
-                    d.bits = u32::from(c);
-                    d.bit_offset = 8;
-                } else {
-                    error!("unexpected eof");
-                    return Err(HuffmanError::UnexpectedEof);
-                }
-            }
-            n = (self.nodes[n as usize].children + 1) as u32 & d.bits;
-            d.bits >>= 1;
-            d.bit_offset -= 1;
-        }*/
         Ok(self.nodes[n as usize].symbol)
     }
 }
