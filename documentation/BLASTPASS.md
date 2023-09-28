@@ -48,9 +48,9 @@ The format outlines two methodologies for coding the prefix code lengths, define
 - [If the bit is 0](https://github.com/webmproject/libwebp/blob/902bc9190331343b2017211debcec8d2ab87e17a/src/dec/vp8l_dec.c#L341): it implies a normal code length code.
 Regardless of the method employed, the format permits the presence of unused code lengths within the stream.
 
-This discussion will center on the normal code length code. Here, the code lengths are encoded using prefix codes, necessitating an initial reading of lower-level code lengths (code_length_code_lengths).
+This discussion will center on the normal code length code. Here, the code lengths are encoded using prefix codes, necessitating an initial reading of lower-level code lengths (`code_length_code_lengths`).
 
-Upon reading the code lengths, a specific prefix code is generated for each symbol type (A, R, G, B, distance) based on their respective alphabet sizes:
+Upon reading the code lengths, a specific prefix code is generated for each symbol type (A, R, G, B, distance) based on their respective [alphabet sizes](https://github.com/webmproject/libwebp/blob/902bc9190331343b2017211debcec8d2ab87e17a/src/dec/vp8l_dec.c#L90):
 
 - G Channel: Calculated as 256 + 24 + color_cache_size
 - Other Literals (A,R,B): Constant at 256
@@ -113,9 +113,9 @@ static const uint16_t kAlphabetSize[HUFFMAN_CODES_PER_META_CODE] = {
 ```
 The out of bound write will occur later when reading the Huffman codes bitstream at the offset`huffman_tables + (num_htree_groups * table_size)`.
 
-2. The overflow triggered by the lengths codes shared by [Ben Hawkes](https://blog.isosceles.com/the-webp-0day/) and [mistymntncop](https://github.com/mistymntncop/CVE-2023-4863/blob/main/print_tree.c#L22) is triggered in the parsing of the 2nd level table of the distance channel which has a maximum size of 410.
+2. The overflow triggered by the lengths codes shared by [Ben Hawkes](https://blog.isosceles.com/the-webp-0day/) and [mistymntncop](https://github.com/mistymntncop/CVE-2023-4863/blob/main/print_tree.c#L22) is triggered in the parsing of the [2nd level table](https://github.com/webmproject/libwebp/blob/902bc9190331343b2017211debcec8d2ab87e17a/src/utils/huffman_utils.c#L171) of the distance channel which has a maximum size of 410.
 
-The out-of-bound write happens when calling the `ReplicateValue()` with an out-of-bound index used for `table`, within the `BuildHuffmanTable()` function.
+The out-of-bound write happens when calling the [`ReplicateValue()`](https://github.com/webmproject/libwebp/blob/902bc9190331343b2017211debcec8d2ab87e17a/src/utils/huffman_utils.c#L196) with an out-of-bound index used for `table`, within the `BuildHuffmanTable()` function.
 
 ```cpp
     idx++;
