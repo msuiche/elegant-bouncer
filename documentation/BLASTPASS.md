@@ -35,8 +35,8 @@ Resource Interchange File Format (RIFF) is a universal file container format tha
 #### Bitstream Chunk Categories
 The bitstream chunk might appear in two variations:
 
-- VP8 Chunk: Identified by the tag "VP8 " (with a notable fourth-character space).
-- VP8L Chunk: Identified by the tag "VP8L".
+- VP8 Chunk: Identified by the tag `"VP8 "` (with a notable fourth-character space).
+- VP8L Chunk: Identified by the tag `"VP8L"`.
 
 For the context of this blog post, the attention is directed solely towards the VP8L chunks.
 
@@ -52,9 +52,9 @@ This discussion will center on the normal code length code. Here, the code lengt
 
 Upon reading the code lengths, a specific prefix code is generated for each symbol type (A, R, G, B, distance) based on their respective [alphabet sizes](https://github.com/webmproject/libwebp/blob/902bc9190331343b2017211debcec8d2ab87e17a/src/dec/vp8l_dec.c#L90):
 
-- G Channel: Calculated as 256 + 24 + color_cache_size
-- Other Literals (A,R,B): Constant at 256
-- Distance Code: Constant at 40
+- G Channel: Calculated as `256 + 24 + color_cache_size`
+- Other Literals (A,R,B): Constant at `256`
+- Distance Code: Constant at `40`
 
 Five Huffman codes are used at each meta code:
 1. green + length prefix codes + color cache codes
@@ -69,7 +69,7 @@ This computation aids in determining the alphabet size (kAlphabetSize) and, cruc
 - Distance Alphabet: 40
 - Lookup Table Sizes: 630 and 410 respectively for worst-case scenarios.
 
-The size of the green alphabet depends on the color cache size and is computed as 256 (green component values) + 24 (length prefix values) + color_cache_size (ranging between 0 and 2048).
+The size of the green alphabet depends on the color cache size and is computed as `256 (green component values) + 24 (length prefix values) + color_cache_size` (ranging between 0 and 2048).
 
 For further technical insight, refer to Mark Adler’s tool for an in-depth examination of 8-bit first-level lookup values: Mark Adler's Tool.
 
@@ -104,8 +104,8 @@ static const uint16_t kAlphabetSize[HUFFMAN_CODES_PER_META_CODE] = {
 ## The Bug
 
 1. The overflowed Huffman Table `huffman_tables` is allocated inside `ReadHuffmanCodes()` based on two main parameters:
-- The number of Huffman Tree Groups
-- A fixed table size which determined as above based on the presence of `color_cache_size` (equal to zero in our example).
+    - The number of Huffman Tree Groups
+    - A fixed table size which determined as above based on the presence of `color_cache_size` (equal to zero in our example).
 
 ```cpp
   huffman_tables = (HuffmanCode*)WebPSafeMalloc(num_htree_groups * table_size,
@@ -148,7 +148,7 @@ Maximum size of a given look-up table (`max_table_size`) is be determined base o
 
 Given the design, this probably means that codes lengths of the other channels may also be used to overflow the Huffman Look-up Table which is was we ensure the boundaries of each of the channel lookup table.
 
-![output of the detection tool](./elegantbouncer.png)
+![output of the detection tool](./images/elegantbouncer.png)
 
 ## Recommendations
 Ironically enough, the WebP spec did (unsurprisingly) have the following warning:
@@ -156,7 +156,7 @@ Ironically enough, the WebP spec did (unsurprisingly) have the following warning
 
 This definitely reinforce the long term value of memory safe languages such as Rust, for file parsing libraries. In the meantime, while numerous of those libraries are still written in C/C++ they are de facto bound to errors.
 
-If you think you are at risk of such exploits, I strongly recommend you to enable (Apple's Lockdown Mode](https://support.apple.com/en-us/HT212650).
+If you think you are at risk of such exploits, I strongly recommend you to enable [Apple's Lockdown Mode](https://support.apple.com/en-us/HT212650).
 
 When activated, Lockdown Mode alters the functioning of various apps and features, including:
 
