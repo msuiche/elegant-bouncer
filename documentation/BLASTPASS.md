@@ -148,7 +148,7 @@ Maximum size of a given look-up table (`max_table_size`) is be determined base o
 
 Given the design, this probably means that codes lengths of the other channels may also be used to overflow the Huffman Look-up Table which is was we ensure the boundaries of each of the channel lookup table.
 
-![output of the detection tool](./images/elegantbouncer.png)
+![output of the detection tool](./documentation/elegantbouncer.png)
 
 ## Recommendations
 Ironically enough, the WebP spec did (unsurprisingly) have the following warning:
