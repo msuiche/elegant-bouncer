@@ -59,7 +59,7 @@ Note: Pre-made samples can be found in the [`samples/`](samples/) directory.
 Use [**Lockdown Mode**](https://support.apple.com/en-us/HT212650) to decrease your attack surface if you think you are a person of interest.
 
 ## Acknowledgements
-- Apple Security Engineering and Architecture (SEAR)
+- [Apple Security Engineering and Architecture (SEAR)](https://bugs.chromium.org/p/chromium/issues/detail?id=1479274)
 - [Bill Marczack](https://twitter.com/@billmarczak)
 - [Jeff](https://twitter.com/jeffssh/status/1474605696020881409) for helping me understand FORCEDENTRY
 - [Valentina](https://twitter.com/chompie1337) for suggesting this target
