@@ -26,6 +26,14 @@ mod tests {
     }
 
     #[test]
+    fn test_blastpass_apple_sample() {
+        let path = Path::new("tests/samples/replicatevalue_poc.not_.webp");
+        let res = scan_webp_vp8l_file(path);
+
+        assert_eq!(res.ok(), Some(ScanResultStatus::StatusMalicious));
+    }
+
+    #[test]
     fn test_forcedentry_sample() {
         let path = Path::new("tests/samples/FORCEDENTRY.gif");
         let res = scan_pdf_jbig2_file(path);
