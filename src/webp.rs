@@ -504,7 +504,7 @@ pub fn scan_webp_vp8l_file(path: &path::Path) -> Result<ScanResultStatus> {
     // Color Cache
     let mut color_cache_bits = 0;
     if reader.read_bit().unwrap() != 0 {
-        color_cache_bits = reader.read_bit().unwrap();
+        color_cache_bits = reader.read_bits(4).unwrap();
         // info!("color_cache_bits = 0x{:x}", color_cache_bits);
     }
 
