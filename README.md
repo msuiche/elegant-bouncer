@@ -53,7 +53,7 @@ Use `--scan` to assess a given file, checking for known vulnerabilities.
 ### create-forcedentry
 Use `--create-forcedentry` to generate a PDF from the ground up designed to exploit CVE-2021-30860. Work in progress.
 
-Note: Pre-made samples can be found in the [`samples/`](samples/) directory.
+Note: Pre-made samples can be found in the [`samples/`](tests/samples/) directory.
 
 ## Recommendations
 Use [**Lockdown Mode**](https://support.apple.com/en-us/HT212650) to decrease your attack surface if you think you are a person of interest.
