@@ -17,6 +17,7 @@ use std::io;
 use thiserror::Error;
 
 use crate::webp::WebpError;
+use crate::ttf::TtfError;
 // use crate::huffman::HuffmanError;
 
 #[derive(Debug, Error)]
@@ -29,6 +30,9 @@ pub enum ElegantError {
 
     #[error("WEBP error: {0}")]
     WebpError(WebpError),
+
+    #[error("TTF error: {0}")]
+    TtfError(TtfError),
 
     /*
     #[error("Huffman error: {0}")]

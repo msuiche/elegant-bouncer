@@ -1,5 +1,6 @@
 use elegantbouncer::webp::{is_code_lengths_count_valid, scan_webp_vp8l_file, MAX_DISTANCE_TABLE_SIZE};
 use elegantbouncer::jbig2::scan_pdf_jbig2_file;
+use elegantbouncer::ttf::scan_ttf_file;
 
 use elegantbouncer::errors::ScanResultStatus;
 
@@ -37,6 +38,14 @@ mod tests {
     fn test_forcedentry_sample() {
         let path = Path::new("tests/samples/FORCEDENTRY.gif");
         let res = scan_pdf_jbig2_file(path);
+
+        assert_eq!(res.ok(), Some(ScanResultStatus::StatusMalicious));
+    }
+
+    #[test]
+    fn test_run_ttf() {
+        let path = Path::new("tests/samples/07558_CenturyGothic.ttf");
+        let res = scan_ttf_file(path);
 
         assert_eq!(res.ok(), Some(ScanResultStatus::StatusMalicious));
     }

@@ -17,6 +17,7 @@
 
 mod jbig2;
 mod webp;
+mod ttf;
 mod errors;
 mod huffman;
 
@@ -29,6 +30,7 @@ use clap::Parser;
 
 use crate::jbig2 as FORCEDENTRY;
 use crate::webp as BLASTPASS;
+use crate::ttf as TRIANGULATION;
 
 use crate::errors::*;
 
@@ -196,6 +198,25 @@ fn main() -> Result<()> {
             cve_ids: "CVE-2023-4863, CVE-2023-41064", 
             description: "Malicious WebP presumably shared over iMessage and other mediums", 
             detected: blastpass_detected});
+
+        let mut triangulation_detect = false;
+        match TRIANGULATION::scan_ttf_file(&path) {
+            Ok(status) => {
+                info!("TTF file successfully analyzed.");
+                if status == ScanResultStatus::StatusMalicious {
+                    triangulation_detect = true;
+                }
+            },
+            Err(_e) => {
+                // Handle error
+                // eprintln!("Analysis failed with error: {}", e);
+            }    
+        }
+        results.push(Results {
+            name: "TRIANGULATION", 
+            cve_ids: "CVE-2023-41990", 
+            description: "Maliciously crafted TrueType font embedded in PDFs shared over iMessage", 
+            detected: triangulation_detect});
 
     } else if args.create_forcedentry {
         FORCEDENTRY::create(&path)?;

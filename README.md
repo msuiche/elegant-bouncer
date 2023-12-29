@@ -3,13 +3,14 @@
 # ELEGANTBOUNCER
 ELEGANTBOUNCER is a detection tool for file-based mobile exploits.
 
-It employs an innovative approach for advanced file-based threat identification, eliminating the need for in-the-wild samples and outperforming traditional methods based on regular expressions or IOCs. At present, it primarily targets the identification of mobile vulnerabilities such as FORCEDENTRY (CVE-2021-30860) and BLASTPASS (CVE-2023-4863, CVE-2023-41064).
+It employs an innovative approach for advanced file-based threat identification, eliminating the need for in-the-wild samples and outperforming traditional methods based on regular expressions or IOCs. At present, it primarily targets the identification of mobile vulnerabilities such as FORCEDENTRY (CVE-2021-30860), BLASTPASS (CVE-2023-4863, CVE-2023-41064), and TRIANGULATION (CVE-2023-41990).
 
 ## Support Table
-| Threat Name  | CVEs                            | Supported          |
-|--------------|---------------------------------|--------------------|
-| FORCEDENTRY  | CVE-2021-30860                  | :white_check_mark: |
-| BLASTDOOR    | CVE-2023-4863, CVE-2023-41064   | :white_check_mark: |
+| Threat Name    | CVEs                            | Supported          |
+|----------------|---------------------------------|--------------------|
+| FORCEDENTRY    | CVE-2021-30860                  | :white_check_mark: |
+| BLASTDOOR      | CVE-2023-4863, CVE-2023-41064   | :white_check_mark: |
+| TRIANGULATION  | CVE-2023-41990                  | :white_check_mark: |
 
 ![output of the detection tool](./documentation/elegantbouncer.png)
 
@@ -59,6 +60,7 @@ Note: Pre-made samples can be found in the [`samples/`](tests/samples/) director
 Use [**Lockdown Mode**](https://support.apple.com/en-us/HT212650) to decrease your attack surface if you think you are a person of interest.
 
 ## Acknowledgements
+- [Valentin Pashkov, Mikhail Vinogradov, Georgy Kucherin (@kucher1n), Leonid Bezvershenko (@bzvr_), and Boris Larin (@oct0xor) of Kaspersky](https://securelist.com/operation-triangulation-the-last-hardware-mystery/111669/)
 - [Apple Security Engineering and Architecture (SEAR)](https://bugs.chromium.org/p/chromium/issues/detail?id=1479274)
 - [Bill Marczack](https://twitter.com/@billmarczak)
 - [Jeff](https://twitter.com/jeffssh/status/1474605696020881409) for helping me understand FORCEDENTRY
