@@ -70,6 +70,7 @@ Use [**Lockdown Mode**](https://support.apple.com/en-us/HT212650) to decrease yo
 - [Ben Hawkes](https://blog.isosceles.com/the-webp-0day/)
 
 ## References
+- [Researching Triangulation: Detecting CVE-2023-41990 with single byte signatures.](https://www.msuiche.com/posts/researching-triangulation-detecting-cve-2023-41990-with-single-byte-signatures./)
 - [Researching FORCEDENTRY: Detecting the Exploit With No Samples](https://www.msuiche.com/posts/researching-forcedentry-detecting-the-exploit-with-no-samples/)
 - [Researching BLASTPASS: Detecting the exploit inside a WebP file - Part 1](https://www.msuiche.com/posts/researching-blastpass-detecting-the-exploit-inside-a-webp-file-part-1/)
 - [Researching BLASTPASS: Analysing the Apple & Google WebP POC file - Part 2](https://www.msuiche.com/posts/researching-blastpass-analysing-the-apple-google-webp-poc-file-part-2/)

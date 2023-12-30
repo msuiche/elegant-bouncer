@@ -291,8 +291,6 @@ pub fn scan_ttf_file(path: &path::Path) -> Result<ScanResultStatus> {
         }
     }
 
-    info!("ok");
-
     if !header.is_valid() {
         error!("Not a TTF file. Ignore");
         return Err(ElegantError::TtfError(TtfError::InvalidFile));
