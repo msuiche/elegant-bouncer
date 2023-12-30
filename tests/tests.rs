@@ -47,6 +47,6 @@ mod tests {
         let path = Path::new("tests/samples/07558_CenturyGothic.ttf");
         let res = scan_ttf_file(path);
 
-        assert_eq!(res.ok(), Some(ScanResultStatus::StatusMalicious));
+        assert_eq!(res.ok(), Some(ScanResultStatus::StatusOk));
     }
 }

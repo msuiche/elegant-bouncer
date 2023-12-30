@@ -248,27 +248,39 @@ pub fn scan_ttf_file(path: &path::Path) -> Result<ScanResultStatus> {
 
                 for glyf_id in 0..num_glyph {
                     file.seek(SeekFrom::Start(((loca.offset + (glyf_id * 2) as u32) as i64).try_into().unwrap()))?;
-                    let glyf_offset = file.read_u16::<byteorder::BigEndian>()?;
-                    let glyf_offset = glyf_offset * 2; // head.indexToLocFormat is assumed to be 0.
-                    // debug!("glyf_offset = 0x{:x}", glyf_offset);
-                    file.seek(SeekFrom::Start(((glyf.offset + glyf_offset as u32) as i64).try_into().unwrap()))?;
+                    let glyf_offset = file.read_u16::<byteorder::BigEndian>()? as u32;
+                    let glyf_offset = glyf_offset as u32 * 2; // head.indexToLocFormat is assumed to be 0.
+                    debug!("{}: glyf offset = {:x} (0x{:x})", glyf_id, glyf_offset, glyf.offset + glyf_offset);
 
-                    let nb_of_contours = file.read_u16::<byteorder::BigEndian>()?;
+                    file.seek(SeekFrom::Start(((glyf.offset + glyf_offset) as i64).try_into().unwrap()))?;
+
+                    let nb_of_contours = file.read_i16::<byteorder::BigEndian>()?;
                     let _x_min = file.read_u16::<byteorder::BigEndian>()?;
                     let _y_min = file.read_u16::<byteorder::BigEndian>()?;
                     let _x_max = file.read_u16::<byteorder::BigEndian>()?;
                     let _y_max = file.read_u16::<byteorder::BigEndian>()?;
+
+                    // If the number of contours is greater than or equal to zero, this is a simple glyph. 
+                    // If negative, this is a composite glyph — the value -1 should be used for composite glyphs.
+                    if nb_of_contours < 0 {
+                        continue;
+                    }
+
+                    // if nb_of_contours != 0xffff {
                     for _i in 0..nb_of_contours { 
                         let _num_points = file.read_u16::<byteorder::BigEndian>()?;
                     }
                     let instructions_len = file.read_u16::<byteorder::BigEndian>()?;
                     // instructions
+                    debug!("instruction len = 0x{:x}", instructions_len);
                     let mut byte_data = vec![0; instructions_len as usize];
                     file.read_exact(&mut byte_data)?;
+
                     if let Ok(status) = is_adjust_inst_present(&byte_data) {
                         if status == true {
                             info!("glyf id = {} and inst len is 0x{:x}", glyf_id, instructions_len);
-                            info!("Found in the glyf {:?} with id {} with base offset {:x}", glyf.tag, glyf_id, glyf.offset);
+                            info!("Found in the glyf {:?} with id {} with base offset {:x} (0x{:x})",
+                                glyf.tag, glyf_id, glyf.offset, glyf.offset + glyf_offset);
                             return Ok(ScanResultStatus::StatusMalicious);
                         }
                     }
@@ -278,6 +290,8 @@ pub fn scan_ttf_file(path: &path::Path) -> Result<ScanResultStatus> {
             }
         }
     }
+
+    info!("ok");
 
     if !header.is_valid() {
         error!("Not a TTF file. Ignore");
