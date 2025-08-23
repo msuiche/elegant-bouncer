@@ -21,10 +21,12 @@ mod ttf;
 mod dng;
 mod errors;
 mod huffman;
+mod tui;
 
 use std::path::{Path, PathBuf};
 use colored::*;
 use walkdir::WalkDir;
+use indicatif::{ProgressBar, ProgressStyle};
 
 use env_logger;
 use log::LevelFilter;
@@ -71,6 +73,10 @@ struct Args {
     /// Recursively scan subfolders
     #[clap(short, long)]
     recursive: bool,
+
+    /// Use Terminal User Interface for scanning
+    #[clap(long)]
+    tui: bool,
 
     /// File extensions to scan (comma-separated, e.g., "pdf,webp,ttf")
     /// Default: pdf,gif,webp,jpg,jpeg,png,tif,tiff,dng,ttf,otf
@@ -142,15 +148,15 @@ fn should_scan_file(path: &Path, extensions: &[String]) -> bool {
 }
 
 #[derive(Clone)]
-struct ScanResult {
-    file_path: PathBuf,
-    forcedentry: bool,
-    blastpass: bool,
-    triangulation: bool,
-    cve_2025_43300: bool,
+pub struct ScanResult {
+    pub file_path: PathBuf,
+    pub forcedentry: bool,
+    pub blastpass: bool,
+    pub triangulation: bool,
+    pub cve_2025_43300: bool,
 }
 
-fn scan_single_file(path: &Path) -> ScanResult {
+pub fn scan_single_file(path: &Path) -> ScanResult {
     let mut result = ScanResult {
         file_path: path.to_path_buf(),
         forcedentry: false,
@@ -229,37 +235,42 @@ fn print_hashes(filename: &str) -> io::Result<()> {
 }
 
 fn main() -> Result<()> {
-    // Print clean header
-    println!();
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!();
-    println!("                    {} v{}", "ELEGANTBOUNCER".green().bold(), CRATE_VERSION.cyan().bold());
-    println!("          Detection Tool for File-Based Mobile Exploits");
-    println!();
-    println!("  {}: {} • {} • {} • {}", 
-        "Threats".yellow().bold(),
-        "FORCEDENTRY".bright_red(),
-        "BLASTPASS".bright_red(),
-        "TRIANGULATION".bright_red(),
-        "CVE-2025-43300".bright_red()
-    );
-    println!();
-    println!("  {} Matt Suiche (@msuiche)", "Author:".bright_blue());
-    println!("  {} https://github.com/msuiche/elegant-bouncer", "GitHub:".bright_blue());
-    println!("  {} https://www.msuiche.com", "Website:".bright_blue());
-    println!();
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!();
-
     let args = Args::parse();
+    
+    // Print clean header only if not in TUI mode
+    if !args.tui {
+        println!();
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!();
+        println!("                    {} v{}", "ELEGANTBOUNCER".green().bold(), CRATE_VERSION.cyan().bold());
+        println!("          Detection Tool for File-Based Mobile Exploits");
+        println!();
+        println!("  {}: {} • {} • {} • {}", 
+            "Threats".yellow().bold(),
+            "FORCEDENTRY".bright_red(),
+            "BLASTPASS".bright_red(),
+            "TRIANGULATION".bright_red(),
+            "CVE-2025-43300".bright_red()
+        );
+        println!();
+        println!("  {} Matt Suiche (@msuiche)", "Author:".bright_blue());
+        println!("  {} https://github.com/msuiche/elegant-bouncer", "GitHub:".bright_blue());
+        println!("  {} https://www.msuiche.com", "Website:".bright_blue());
+        println!();
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!();
+    }
 
-    let level = if args.verbose {
-        LevelFilter::max()
-    } else {
-        LevelFilter::Info
-    };
+    // Don't initialize logger if in TUI mode to prevent output corruption
+    if !args.tui {
+        let level = if args.verbose {
+            LevelFilter::max()
+        } else {
+            LevelFilter::Info
+        };
 
-    env_logger::Builder::new().filter_level(level).init();
+        env_logger::Builder::new().filter_level(level).init();
+    }
 
     if !args.scan && !args.create_forcedentry {
         println!("You need to supply an action. Run with {} for more information.", "--help".green());
@@ -277,7 +288,47 @@ fn main() -> Result<()> {
         let extensions = args.extensions.unwrap_or_else(get_default_extensions);
         let mut all_scan_results = Vec::new();
 
-        if path.is_file() {
+        // Use TUI mode if requested
+        if args.tui {
+            // Collect files to scan
+            let mut files_to_scan = Vec::new();
+            
+            if path.is_file() {
+                files_to_scan.push(path.to_path_buf());
+            } else if path.is_dir() {
+                let walker = if args.recursive {
+                    WalkDir::new(path)
+                } else {
+                    WalkDir::new(path).max_depth(1)
+                };
+
+                files_to_scan = walker
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().is_file())
+                    .filter(|e| should_scan_file(e.path(), &extensions))
+                    .map(|e| e.path().to_path_buf())
+                    .collect();
+            }
+
+            if files_to_scan.is_empty() {
+                println!("No files found to scan.");
+                return Ok(());
+            }
+
+            // Run TUI scan
+            match tui::run_tui_scan(files_to_scan) {
+                Ok(results) => {
+                    all_scan_results = results;
+                    // Exit after TUI completes - the TUI already shows results
+                    return Ok(());
+                }
+                Err(e) => {
+                    eprintln!("TUI error: {}", e);
+                    return Ok(());
+                }
+            }
+        } else if path.is_file() {
             // Single file scan
             println!("[+] Scanning file: {}", path.display());
             let result = scan_single_file(path);
@@ -287,52 +338,75 @@ fn main() -> Result<()> {
             println!();
             let _ = print_hashes(&args.path);
         } else if path.is_dir() {
-            // Directory scan
-            let mut file_count = 0;
-            println!("[+] Scanning directory: {}", path.display());
+            // Directory scan with progress bar
+            println!("{} Scanning directory: {}", "►".cyan().bold(), path.display().to_string().bright_white());
             if args.recursive {
-                println!("[+] Recursive mode enabled");
+                println!("{} Recursive mode: {}", "►".cyan().bold(), "ENABLED".green());
             }
-            println!("[+] Extensions: {}", extensions.join(", "));
+            println!("{} Extensions: {}", "►".cyan().bold(), extensions.join(", ").yellow());
             println!();
 
+            // First, collect all files to scan
             let walker = if args.recursive {
                 WalkDir::new(path)
             } else {
                 WalkDir::new(path).max_depth(1)
             };
 
-            for entry in walker.into_iter().filter_map(|e| e.ok()) {
-                if entry.file_type().is_file() {
-                    let file_path = entry.path();
-                    if should_scan_file(file_path, &extensions) {
-                        file_count += 1;
-                        println!("[{}] Scanning: {}", file_count, file_path.display());
-                        let result = scan_single_file(file_path);
-                        
-                        // Report if any threats found
-                        if result.forcedentry || result.blastpass || result.triangulation || result.cve_2025_43300 {
-                            print!("  └─ {} found: ", "THREAT".red());
-                            let mut threats = Vec::new();
-                            if result.forcedentry { threats.push("FORCEDENTRY"); }
-                            if result.blastpass { threats.push("BLASTPASS"); }
-                            if result.triangulation { threats.push("TRIANGULATION"); }
-                            if result.cve_2025_43300 { threats.push("CVE-2025-43300"); }
-                            println!("{}", threats.join(", ").red());
-                        }
-                        
-                        all_scan_results.push(result);
-                    }
-                }
-            }
-            
-            if file_count == 0 {
-                println!("No files found with specified extensions.");
+            let files_to_scan: Vec<_> = walker
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_file())
+                .filter(|e| should_scan_file(e.path(), &extensions))
+                .collect();
+
+            if files_to_scan.is_empty() {
+                println!("{} No files found with specified extensions.", "⚠".yellow());
                 return Ok(());
             }
+
+            // Create progress bar
+            let pb = ProgressBar::new(files_to_scan.len() as u64);
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")
+                    .unwrap()
+                    .progress_chars("█▓▒░ ")
+                    .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+            );
+
+            let mut threat_count = 0;
+            for (idx, entry) in files_to_scan.iter().enumerate() {
+                let file_path = entry.path();
+                let file_name = file_path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown");
+                
+                pb.set_message(format!("Scanning: {}", file_name));
+                pb.set_position((idx + 1) as u64);
+                
+                let result = scan_single_file(file_path);
+                
+                // Report if any threats found
+                if result.forcedentry || result.blastpass || result.triangulation || result.cve_2025_43300 {
+                    threat_count += 1;
+                    pb.suspend(|| {
+                        print!("  {} {} - ", "✗".red().bold(), file_path.display().to_string().bright_white());
+                        let mut threats = Vec::new();
+                        if result.forcedentry { threats.push("FORCEDENTRY"); }
+                        if result.blastpass { threats.push("BLASTPASS"); }
+                        if result.triangulation { threats.push("TRIANGULATION"); }
+                        if result.cve_2025_43300 { threats.push("CVE-2025-43300"); }
+                        println!("{}", threats.join(", ").red().bold());
+                    });
+                }
+                
+                all_scan_results.push(result);
+            }
             
+            pb.finish_with_message(format!("Completed - {} threats found", threat_count));
             println!();
-            println!("[+] Scanned {} files", file_count);
+            println!("{} Scanned {} files", "✓".green().bold(), files_to_scan.len());
         } else {
             eprintln!("Error: Path '{}' does not exist or is not accessible", path.display());
             return Ok(());
@@ -364,9 +438,12 @@ fn main() -> Result<()> {
             }
         }
 
-        // Display summary results
+        // Display summary results with improved formatting
         println!();
-        println!("[+] Summary Results:");
+        println!("╔══════════════════════════════════════════════════════════════════════════╗");
+        println!("║                           {} SUMMARY RESULTS {}                           ║", "▓".cyan(), "▓".cyan());
+        println!("╚══════════════════════════════════════════════════════════════════════════╝");
+        println!();
         let results = vec![
             Results {
                 name: "FORCEDENTRY",
@@ -449,7 +526,10 @@ fn main() -> Result<()> {
             
             if !infected_details.is_empty() {
                 println!();
-                println!("{} Infected Files Details:", "[!]".red());
+                println!("╔══════════════════════════════════════════════════════════════════════════╗");
+                println!("║                        {} INFECTED FILES DETECTED {}                       ║", "⚠".red().bold(), "⚠".red().bold());
+                println!("╚══════════════════════════════════════════════════════════════════════════╝");
+                println!();
                 let infected_table = Table::new(infected_details).with(Style::rounded()).to_string();
                 println!("{}", infected_table);
             }
