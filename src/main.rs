@@ -18,6 +18,7 @@
 mod jbig2;
 mod webp;
 mod ttf;
+mod dng;
 mod errors;
 mod huffman;
 
@@ -217,6 +218,18 @@ fn main() -> Result<()> {
             cve_ids: "CVE-2023-41990", 
             description: "Maliciously crafted TrueType font embedded in PDFs shared over iMessage", 
             detected: triangulation_detect});
+
+        let mut dng_detected = false;
+        let dng_status = dng::scan_dng_file(&path);
+        info!("DNG file successfully analyzed.");
+        if dng_status == ScanResultStatus::StatusMalicious {
+            dng_detected = true;
+        }
+        results.push(Results {
+            name: "CVE-2025-43300",
+            cve_ids: "CVE-2025-43300",
+            description: "Malicious DNG with JPEG Lossless compression exploiting RawCamera.bundle",
+            detected: dng_detected});
 
     } else if args.create_forcedentry {
         FORCEDENTRY::create(&path)?;

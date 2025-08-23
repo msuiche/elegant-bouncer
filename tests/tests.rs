@@ -1,6 +1,7 @@
 use elegantbouncer::webp::{is_code_lengths_count_valid, scan_webp_vp8l_file, MAX_DISTANCE_TABLE_SIZE};
 use elegantbouncer::jbig2::scan_pdf_jbig2_file;
 use elegantbouncer::ttf::scan_ttf_file;
+use elegantbouncer::dng::scan_dng_file;
 
 use elegantbouncer::errors::ScanResultStatus;
 
@@ -48,5 +49,21 @@ mod tests {
         let res = scan_ttf_file(path);
 
         assert_eq!(res.ok(), Some(ScanResultStatus::StatusOk));
+    }
+
+    #[test]
+    fn test_cve_2025_43300_malicious() {
+        let path = Path::new("/Users/msuiche/Downloads/IMGP0847_malicious.DNG");
+        let res = scan_dng_file(path);
+
+        assert_eq!(res, ScanResultStatus::StatusMalicious);
+    }
+
+    #[test]
+    fn test_cve_2025_43300_benign() {
+        let path = Path::new("/Users/msuiche/Downloads/IMGP0847.DNG");
+        let res = scan_dng_file(path);
+
+        assert_eq!(res, ScanResultStatus::StatusOk);
     }
 }
