@@ -14,6 +14,7 @@ use crate::errors::ScanResultStatus;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use log::{error, warn};
 
 const TIFF_LITTLE_ENDIAN: u16 = 0x4949;
 const TIFF_BIG_ENDIAN: u16 = 0x4D4D;
@@ -279,7 +280,7 @@ pub fn scan_dng_file(file_path: &Path) -> ScanResultStatus {
                 if let Ok((is_suspicious, offset)) = reader.check_samples_per_pixel(&entry) {
                     if is_suspicious {
                         suspicious_samples_per_pixel = true;
-                        println!("[!] Suspicious SamplesPerPixel value (2) found at offset 0x{:X}", offset);
+                        warn!("[!] Suspicious SamplesPerPixel value (2) found at offset 0x{:X}", offset);
                     }
                 }
             }
@@ -305,10 +306,10 @@ pub fn scan_dng_file(file_path: &Path) -> ScanResultStatus {
     if has_jpeg_lossless && jpeg_offset > 0 {
         if let Ok(has_suspicious_sof3) = reader.check_jpeg_lossless(jpeg_offset) {
             if has_suspicious_sof3 {
-                println!("[!] Suspicious SOF3 component count (1) found in JPEG Lossless data");
+                warn!("[!] Suspicious SOF3 component count (1) found in JPEG Lossless data");
                 
                 if suspicious_samples_per_pixel {
-                    println!("[!!!] CVE-2025-43300 detected: Modified SamplesPerPixel + SOF3 component count");
+                    error!("[!!!] CVE-2025-43300 detected: Modified SamplesPerPixel + SOF3 component count");
                     return ScanResultStatus::StatusMalicious;
                 }
             }

@@ -229,10 +229,26 @@ fn print_hashes(filename: &str) -> io::Result<()> {
 }
 
 fn main() -> Result<()> {
-    println!("{} v{} - Detection tool for file-based mobile exploits.", "ELEGANTBOUNCER".green(), CRATE_VERSION);
-    println!("> https://github.com/msuiche/elegant-bouncer");
-    println!("Copyright (c) 2022-2023, Matt Suiche (@msuiche)");
-    println!("> https://www.msuiche.com");
+    // Print clean header
+    println!();
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!();
+    println!("                    {} v{}", "ELEGANTBOUNCER".green().bold(), CRATE_VERSION.cyan().bold());
+    println!("          Detection Tool for File-Based Mobile Exploits");
+    println!();
+    println!("  {}: {} • {} • {} • {}", 
+        "Threats".yellow().bold(),
+        "FORCEDENTRY".bright_red(),
+        "BLASTPASS".bright_red(),
+        "TRIANGULATION".bright_red(),
+        "CVE-2025-43300".bright_red()
+    );
+    println!();
+    println!("  {} Matt Suiche (@msuiche)", "Author:".bright_blue());
+    println!("  {} https://github.com/msuiche/elegant-bouncer", "GitHub:".bright_blue());
+    println!("  {} https://www.msuiche.com", "Website:".bright_blue());
+    println!();
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!();
 
     let args = Args::parse();
