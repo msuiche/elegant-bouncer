@@ -122,70 +122,137 @@ impl TtfHeader {
 
 fn is_adjust_inst_present(byte_data: &Vec<u8>) -> Result<bool> {
     let mut off = 0;
+    let max_iterations = byte_data.len() * 2; // Prevent infinite loops
+    let mut iterations = 0;
+    
     while off < byte_data.len() {
+        // Safety check for malformed bytecode
+        if iterations > max_iterations {
+            warn!("Maximum iterations reached in bytecode parsing - possible malformed font");
+            return Err(ElegantError::TtfError(TtfError::OutOfRangeBytecode));
+        }
+        iterations += 1;
+        
         let opcode = byte_data[off];
+        
         // https://securelist.com/operation-triangulation-the-last-hardware-mystery/111669/
         // Undocumented, Apple-only ADJUST TrueType font instruction. This instruction had existed
         // since the early nineties before a patch removed it.
-
         if opcode == 0x8f || opcode == 0x90 {
-            debug!("0x{:x}: ADAPT /* Add Adjust Instruction for Kanji. Suspicious af. */", off);
-            info!("is_adjust_inst_present() returns to with values: offset {} with byte {:x}", off, byte_data[off]);
+            warn!("0x{:04x}: ADJUST /* Undocumented Apple instruction - TRIANGULATION indicator! */", off);
+            info!("Found ADJUST instruction at offset 0x{:04x} with opcode 0x{:02x}", off, opcode);
             return Ok(true);
         }
-        // NPUSHB[] PUSH N Bytes
-       else if opcode == 0x40 {
-            if off + 1 >= byte_data.len() {
-                return Err(ElegantError::TtfError(TtfError::OutOfRangeBytecode));
-                // return false;
+        
+        // Variable-length instructions that need special handling
+        match opcode {
+            // NPUSHB[] - PUSH N Bytes (0x40)
+            0x40 => {
+                if off + 1 >= byte_data.len() {
+                    return Err(ElegantError::TtfError(TtfError::OutOfRangeBytecode));
+                }
+                let count = byte_data[off + 1] as usize;
+                off += 2; // Skip opcode and count byte
+                if off + count > byte_data.len() {
+                    return Err(ElegantError::TtfError(TtfError::OutOfRangeBytecode));
+                }
+                debug!("0x{:04x}: NPUSHB[{}] /* {} bytes pushed */", off - 2, count, count);
+                off += count;
             }
-            let count = byte_data[off + 1] as usize;
-            off += 1;
-            if off + count >= byte_data.len() {
-                return Err(ElegantError::TtfError(TtfError::OutOfRangeBytecode));
+            
+            // NPUSHW[] - PUSH N Words (0x41)
+            0x41 => {
+                if off + 1 >= byte_data.len() {
+                    return Err(ElegantError::TtfError(TtfError::OutOfRangeBytecode));
+                }
+                let count = byte_data[off + 1] as usize;
+                off += 2; // Skip opcode and count byte
+                if off + count * 2 > byte_data.len() {
+                    return Err(ElegantError::TtfError(TtfError::OutOfRangeBytecode));
+                }
+                debug!("0x{:04x}: NPUSHW[{}] /* {} words pushed */", off - 2, count, count);
+                off += count * 2;
             }
-
-            debug!("0x{:x}: NPUSHB /* {} bytes pushed */", off, count);
-            off += count;
+            
+            // PUSHB[n] - PUSH Bytes (0xB0-0xB7)
+            0xb0..=0xb7 => {
+                let count = (opcode - 0xb0 + 1) as usize;
+                off += 1; // Skip opcode
+                if off + count > byte_data.len() {
+                    return Err(ElegantError::TtfError(TtfError::OutOfRangeBytecode));
+                }
+                debug!("0x{:04x}: PUSHB[{}] /* {} bytes pushed */", off - 1, count - 1, count);
+                off += count;
+            }
+            
+            // PUSHW[n] - PUSH Words (0xB8-0xBF)
+            0xb8..=0xbf => {
+                let count = (opcode - 0xb8 + 1) as usize;
+                off += 1; // Skip opcode
+                if off + count * 2 > byte_data.len() {
+                    return Err(ElegantError::TtfError(TtfError::OutOfRangeBytecode));
+                }
+                debug!("0x{:04x}: PUSHW[{}] /* {} words pushed */", off - 1, count - 1, count);
+                off += count * 2;
+            }
+            
+            // Jump and branch instructions that could affect control flow
+            // These don't have inline data but are important for completeness
+            0x78 => {
+                debug!("0x{:04x}: JROT[] /* Jump Relative On True */", off);
+                off += 1;
+            }
+            0x79 => {
+                debug!("0x{:04x}: JROF[] /* Jump Relative On False */", off);
+                off += 1;
+            }
+            0x1c => {
+                debug!("0x{:04x}: JMPR[] /* Jump Relative */", off);
+                off += 1;
+            }
+            
+            // Function and instruction definitions (variable length)
+            0x2c => {
+                debug!("0x{:04x}: FDEF[] /* Function Definition */", off);
+                // Function definitions continue until ENDF
+                // For safety, we'll just increment normally
+                off += 1;
+            }
+            0x2d => {
+                debug!("0x{:04x}: ENDF[] /* End Function Definition */", off);
+                off += 1;
+            }
+            0x89 => {
+                debug!("0x{:04x}: IDEF[] /* Instruction Definition */", off);
+                // Instruction definitions are also variable length
+                off += 1;
+            }
+            
+            // IF/ELSE control structures
+            0x58 => {
+                debug!("0x{:04x}: IF[] /* If test */", off);
+                off += 1;
+            }
+            0x1b => {
+                debug!("0x{:04x}: ELSE[] /* Else clause */", off);
+                off += 1;
+            }
+            0x59 => {
+                debug!("0x{:04x}: EIF[] /* End if */", off);
+                off += 1;
+            }
+            
+            // Regular single-byte instructions
+            _ => {
+                // Log suspicious or unknown opcodes
+                if opcode > 0x91 && opcode < 0xb0 {
+                    debug!("0x{:04x}: Unknown/Reserved opcode 0x{:02x}", off, opcode);
+                }
+                off += 1;
+            }
         }
-        // NPUSHW[] PUSH N Words
-        if opcode == 0x41 {
-            if off + 1 >= byte_data.len() {
-                return Err(ElegantError::TtfError(TtfError::OutOfRangeBytecode));
-            }
-            let count = byte_data[off + 1] as usize;
-            off += 1;
-            if off + count * 2 >= byte_data.len() {
-                return Err(ElegantError::TtfError(TtfError::OutOfRangeBytecode));
-            }
-
-            debug!("0x{:x}: NPUSHW /* {} words pushed */", off, count);
-            off += count * 2;
-        }
-        // PUSHB[abc] PUSH Bytes
-        else if opcode >= 0xb0 && opcode <= 0xb7 {
-            let count = (opcode - 0xb0 + 1) as usize;
-            if off + count >= byte_data.len() {
-                return Err(ElegantError::TtfError(TtfError::OutOfRangeBytecode));
-            }
-
-            debug!("0x{:x}: PUSHB[{}] /* {} bytes pushed */", off, count, count);
-            off += count;
-        }
-        // PUSHW[abc] PUSH Words
-        else if opcode >= 0xb8 && opcode <= 0xbf {
-            let count = (opcode - 0xb8 + 1) as usize;
-            if off + (count * 2) >= byte_data.len() {
-                return Err(ElegantError::TtfError(TtfError::OutOfRangeBytecode));
-            }
-
-            debug!("0x{:x}: PUSHW[{}] /* {} words pushed */", off, count, count);
-            off += count * 2;
-        }
-
-        off += 1;
     }
-
+    
     Ok(false)
 }
 
