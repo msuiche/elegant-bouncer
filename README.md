@@ -11,6 +11,7 @@ It employs an innovative approach for advanced file-based threat identification,
 | FORCEDENTRY    | CVE-2021-30860                  | :white_check_mark: |
 | BLASTDOOR      | CVE-2023-4863, CVE-2023-41064   | :white_check_mark: |
 | TRIANGULATION  | CVE-2023-41990                  | :white_check_mark: |
+| CVE-2025-43300 | CVE-2025-43300                  | :white_check_mark: |
 
 ![output of the detection tool](./documentation/elegantbouncer.png)
 
@@ -70,6 +71,7 @@ Use [**Lockdown Mode**](https://support.apple.com/en-us/HT212650) to decrease yo
 - [Ben Hawkes](https://blog.isosceles.com/the-webp-0day/)
 
 ## References
+- [Detecting CVE-2025-43300: A Deep Dive into Apple's DNG Processing Vulnerability](https://www.msuiche.com/posts/detecting-cve-2025-43300-a-deep-dive-into-apples-dng-processing-vulnerability/)
 - [Researching Triangulation: Detecting CVE-2023-41990 with single byte signatures.](https://www.msuiche.com/posts/researching-triangulation-detecting-cve-2023-41990-with-single-byte-signatures./)
 - [Researching FORCEDENTRY: Detecting the Exploit With No Samples](https://www.msuiche.com/posts/researching-forcedentry-detecting-the-exploit-with-no-samples/)
 - [Researching BLASTPASS: Detecting the exploit inside a WebP file - Part 1](https://www.msuiche.com/posts/researching-blastpass-detecting-the-exploit-inside-a-webp-file-part-1/)
