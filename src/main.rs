@@ -23,17 +23,25 @@ mod errors;
 mod huffman;
 mod tui;
 
-use std::path::{Path, PathBuf};
+use clap::Parser;
 use colored::*;
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
+use log::LevelFilter;
+use rayon::prelude::*;
+use std::path::{Path, PathBuf};
+use std::env;
+use std::fs;
+use lopdf::Document;
+use rusqlite::{Connection, Result as RusqliteResult};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 use walkdir::WalkDir;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use env_logger;
-use log::LevelFilter;
-use clap::Parser;
 
 use crate::jbig2 as FORCEDENTRY;
 use crate::webp as BLASTPASS;
@@ -50,6 +58,269 @@ use std::{
 use md5;
 use sha1::{Sha1, Digest};
 use sha3::Sha3_256;
+
+fn scan_imessage_db(db_path: &Path, dump_root: &Path) -> Vec<ScanResult> {
+    log::info!("[+] Scanning iMessage database: {}", db_path.display());
+    let mut results = Vec::new();
+    let home_domain_path = dump_root.join("HomeDomain");
+
+    let conn = match Connection::open(db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Failed to open iMessage database {}: {}", db_path.display(), e);
+            return results;
+        }
+    };
+
+    let mut stmt = match conn.prepare("
+        SELECT
+            a.filename,
+            h.id AS sender,
+            datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime') AS message_date
+        FROM attachment a
+        JOIN message_attachment_join maj ON a.ROWID = maj.attachment_id
+        JOIN message m ON maj.message_id = m.ROWID
+        LEFT JOIN handle h ON m.handle_id = h.ROWID
+    ") {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("Failed to prepare statement for {}: {}", db_path.display(), e);
+            return results;
+        }
+    };
+
+    let attachment_iter = match stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?))
+    }) {
+        Ok(iter) => iter,
+        Err(e) => {
+            log::error!("Failed to query attachments from {}: {}", db_path.display(), e);
+            return results;
+        }
+    };
+
+    for row in attachment_iter {
+        if let Ok((relative_path_str, sender, message_date)) = row {
+            if let Some(stripped_path) = relative_path_str.strip_prefix("~/Library/") {
+                let potential_path = home_domain_path.join("Library").join(stripped_path);
+                if potential_path.exists() {
+                    let origin = format!("iMessage from {} on {}", sender.unwrap_or_else(|| "Unknown".to_string()), message_date);
+                    log::info!("--> Scanning iMessage attachment: {} (Origin: {})", potential_path.display(), origin);
+                    let result = scan_single_file_with_origin(&potential_path, Some(origin));
+                    if result.forcedentry || result.blastpass || result.triangulation || result.cve_2025_43300 {
+                        results.push(result);
+                    }
+                } else {
+                    log::warn!("Could not find iMessage attachment: {}", potential_path.display());
+                }
+            }
+        }
+    }
+    results
+}
+
+fn scan_whatsapp_db(db_path: &Path, _dump_root: &Path) -> Vec<ScanResult> {
+    log::info!("[+] Scanning WhatsApp database: {}", db_path.display());
+    let mut results = Vec::new();
+    
+    let app_domain_path = match db_path.ancestors().find(|a| a.to_string_lossy().contains("AppDomainGroup")) {
+        Some(p) => p.to_path_buf(),
+        None => {
+            log::error!("Could not determine AppDomainGroup path for WhatsApp DB: {}", db_path.display());
+            return results;
+        }
+    };
+
+    let conn = match Connection::open(db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Failed to open WhatsApp database {}: {}", db_path.display(), e);
+            return results;
+        }
+    };
+
+    let mut stmt = match conn.prepare("
+        SELECT
+            mi.ZMEDIALOCALPATH,
+            cs.ZPARTNERNAME
+        FROM ZWAMEDIAITEM mi
+        JOIN ZWAMESSAGE m ON mi.ZMESSAGE = m.Z_PK
+        LEFT JOIN ZWACHATSESSION cs ON m.ZCHATSESSION = cs.Z_PK
+        WHERE mi.ZMEDIALOCALPATH IS NOT NULL
+    ") {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("Failed to prepare statement for {}: {}", db_path.display(), e);
+            return results;
+        }
+    };
+
+    let media_items = match stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+    }) {
+        Ok(items) => items,
+        Err(e) => {
+            log::error!("Failed to query media items from {}: {}", db_path.display(), e);
+            return results;
+        }
+    };
+
+    for item_result in media_items {
+        if let Ok((relative_path_str, chat_name)) = item_result {
+            let attachment_path = app_domain_path.join(&relative_path_str);
+            if attachment_path.exists() {
+                let origin = format!("WhatsApp in chat '{}'", chat_name.unwrap_or_else(|| "Unknown".to_string()));
+                log::info!("--> Scanning WhatsApp attachment: {} (Origin: {})", attachment_path.display(), origin);
+                let result = scan_single_file_with_origin(&attachment_path, Some(origin));
+                if result.forcedentry || result.blastpass || result.triangulation || result.cve_2025_43300 {
+                    results.push(result);
+                }
+            } else {
+                log::warn!("Could not find WhatsApp attachment: {}", attachment_path.display());
+            }
+        }
+    }
+    results
+}
+
+fn scan_messaging_apps(path: &Path) -> Vec<ScanResult> {
+    let mut app_scan_results = Vec::new();
+    log::info!("[+] Starting database and app scan phase...");
+
+    let walker = WalkDir::new(path).into_iter();
+    for entry in walker.filter_map(|e| e.ok()) {
+        let entry_path = entry.path();
+        if let Some(file_name) = entry_path.file_name().and_then(|n| n.to_str()) {
+            if file_name == "sms.db" {
+                app_scan_results.extend(scan_imessage_db(entry_path, path));
+            } else if file_name == "ChatStorage.sqlite" {
+                app_scan_results.extend(scan_whatsapp_db(entry_path, path));
+            } else if file_name.ends_with("Viber.sqlite") {
+                app_scan_results.extend(scan_viber_db(entry_path, path));
+            } else if file_name == "db.sqlite" && entry_path.to_string_lossy().contains("Signal") {
+                log::warn!("Found Signal database at {}. The database is encrypted and cannot be parsed directly. Performing a best-effort scan of the adjacent 'Attachments' directory.", entry_path.display());
+                if let Some(parent_dir) = entry_path.parent() {
+                    app_scan_results.extend(scan_signal_attachments(parent_dir.join("Attachments"), path));
+                }
+            }
+        }
+    }
+    
+    app_scan_results.extend(scan_telegram_cache(path));
+    log::info!("[+] Database and app scan phase complete.");
+    app_scan_results
+}
+
+fn scan_telegram_cache(path: &Path) -> Vec<ScanResult> {
+    log::info!("[+] Searching for Telegram cache directories...");
+    let mut telegram_results = Vec::new();
+    let telegram_dirs = ["Telegram", "Telegram Documents", "Telegram Images", "Telegram Video", "Telegram Audio"];
+    let walker = WalkDir::new(path).into_iter();
+    for entry in walker.filter_map(|e| e.ok()) {
+        if entry.file_type().is_dir() {
+            if let Some(dir_name) = entry.path().file_name().and_then(|n| n.to_str()) {
+                if telegram_dirs.contains(&dir_name) {
+                    log::info!("[+] Found Telegram directory: {}. Scanning all contents.", entry.path().display());
+                    for telegram_entry in WalkDir::new(entry.path()).into_iter().filter_map(|e| e.ok()).filter(|e| e.file_type().is_file()) {
+                        let result = scan_single_file_with_origin(telegram_entry.path(), Some("Telegram Cache File".to_string()));
+                        if result.forcedentry || result.blastpass || result.triangulation || result.cve_2025_43300 {
+                            telegram_results.push(result);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    telegram_results
+}
+
+
+fn scan_viber_db(db_path: &Path, _dump_root: &Path) -> Vec<ScanResult> {
+    log::info!("[+] Scanning Viber database: {}", db_path.display());
+    let mut results = Vec::new();
+
+    let app_domain_path = match db_path.ancestors().find(|a| a.to_string_lossy().contains("AppDomain")) {
+        Some(p) => p.to_path_buf(),
+        None => {
+            log::error!("Could not determine AppDomain path for Viber DB: {}", db_path.display());
+            return results;
+        }
+    };
+
+    let conn = match Connection::open(db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Failed to open Viber database {}: {}", db_path.display(), e);
+            return results;
+        }
+    };
+
+    let mut stmt = match conn.prepare("
+        SELECT
+            m.ZPAYLOADPATH,
+            c.ZPARTNERNAME
+        FROM ZVCMESSAGE m
+        LEFT JOIN ZVCCONVERSATION c ON m.ZCONVERSATION = c.Z_PK
+        WHERE m.ZPAYLOADPATH IS NOT NULL
+    ") {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("Failed to prepare statement for {}: {}", db_path.display(), e);
+            return results;
+        }
+    };
+
+    let attachment_iter = match stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+    }) {
+        Ok(iter) => iter,
+        Err(e) => {
+            log::error!("Failed to query attachments from {}: {}", db_path.display(), e);
+            return results;
+        }
+    };
+
+    for row in attachment_iter {
+        if let Ok((relative_path_str, partner_name)) = row {
+            // Viber paths are often relative to the 'Documents' folder within their AppDomain
+            let attachment_path = app_domain_path.join("Documents").join(&relative_path_str);
+            if attachment_path.exists() {
+                let origin = format!("Viber from/to {}", partner_name.unwrap_or_else(|| "Unknown".to_string()));
+                log::info!("--> Scanning Viber attachment: {} (Origin: {})", attachment_path.display(), origin);
+                let result = scan_single_file_with_origin(&attachment_path, Some(origin));
+                if result.forcedentry || result.blastpass || result.triangulation || result.cve_2025_43300 {
+                    results.push(result);
+                }
+            } else {
+                log::warn!("Could not find Viber attachment: {}", attachment_path.display());
+            }
+        }
+    }
+    results
+}
+
+fn scan_signal_attachments(attachments_path: PathBuf, _dump_root: &Path) -> Vec<ScanResult> {
+    let mut results = Vec::new();
+    if !attachments_path.exists() {
+        log::warn!("Signal 'Attachments' directory not found at {}", attachments_path.display());
+        return results;
+    }
+
+    log::info!("[+] Scanning Signal attachments directory: {}", attachments_path.display());
+    let walker = WalkDir::new(attachments_path).into_iter();
+    for entry in walker.filter_map(|e| e.ok()).filter(|e| e.file_type().is_file()) {
+        let path = entry.path();
+        let origin = Some("Signal Attachment".to_string());
+        log::debug!("Scanning Signal attachment: {}", path.display());
+        let result = scan_single_file_with_origin(path, origin);
+        if result.forcedentry || result.blastpass || result.triangulation || result.cve_2025_43300 {
+            results.push(result);
+        }
+    }
+    results
+}
+
+
 
 /*
 const CRATE_VERSION: &'static str =
@@ -77,9 +348,9 @@ struct Args {
     #[clap(short, long)]
     recursive: bool,
 
-    /// Use Terminal User Interface for scanning
-    #[clap(long)]
-    tui: bool,
+    /// Only scan messaging apps (iMessage, WhatsApp, etc.) and skip the general file scan.
+    #[clap(short, long)]
+    messaging_only: bool,
 
     /// File extensions to scan (comma-separated, e.g., "pdf,webp,ttf")
     /// Default: pdf,gif,webp,jpg,jpeg,png,tif,tiff,dng,ttf,otf
@@ -151,103 +422,128 @@ fn should_scan_file(path: &Path, extensions: &[String]) -> bool {
 }
 
 #[derive(Clone)]
-pub struct ScanResult {
-    pub file_path: PathBuf,
-    pub forcedentry: bool,
-    pub blastpass: bool,
-    pub triangulation: bool,
-    pub cve_2025_43300: bool,
+struct ScanResult {
+    file_path: PathBuf,
+    origin: Option<String>,
+    timed_out: bool,
+    forcedentry: bool,
+    blastpass: bool,
+    triangulation: bool,
+    cve_2025_43300: bool,
 }
 
-fn get_file_type(path: &Path) -> Option<String> {
-    // Get extension and convert to lowercase
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_lowercase())
+fn scan_single_file(path: &Path) -> ScanResult {
+    scan_single_file_with_origin(path, None)
 }
 
-fn should_scan_for_threat(file_type: &str, threat_type: &str) -> bool {
-    match threat_type {
-        "forcedentry" => {
-            // FORCEDENTRY is in PDFs with JBIG2
-            matches!(file_type, "pdf" | "gif")
-        }
-        "blastpass" => {
-            // BLASTPASS is in WebP files
-            matches!(file_type, "webp" )
-        }
-        "triangulation" => {
-            // TRIANGULATION is in TrueType fonts
-            // PDFs can embed fonts but we don't parse fonts from PDFs atm.
-            matches!(file_type, "ttf" | "otf" )
-        }
-        "cve_2025_43300" => {
-            // CVE-2025-43300 is in DNG files
-            matches!(file_type, "dng" | "tif" | "tiff")
-        }
-        _ => true
-    }
-}
-
-pub fn scan_single_file(path: &Path) -> ScanResult {
+fn do_actual_scan(path: &Path, origin: Option<String>) -> ScanResult {
     let mut result = ScanResult {
         file_path: path.to_path_buf(),
+        origin,
+        timed_out: false,
         forcedentry: false,
         blastpass: false,
         triangulation: false,
         cve_2025_43300: false,
     };
 
-    // Determine file type once
-    let file_type = get_file_type(path).unwrap_or_else(|| "unknown".to_string());
-
-    // Only run relevant scanners based on file type
-    
-    // FORCEDENTRY scan - only for PDFs and GIFs
-    if should_scan_for_threat(&file_type, "forcedentry") {
-        match FORCEDENTRY::scan_pdf_jbig2_file(path) {
-            Ok(status) => {
-                if status == ScanResultStatus::StatusMalicious {
-                    result.forcedentry = true;
-                }
-            },
-            Err(_) => {}
+    // FORCEDENTRY scan
+    if let Ok(status) = FORCEDENTRY::scan_pdf_jbig2_file(path) {
+        if status == ScanResultStatus::StatusMalicious {
+            result.forcedentry = true;
         }
     }
 
-    // BLASTPASS scan - only for image files
-    if should_scan_for_threat(&file_type, "blastpass") {
-        match BLASTPASS::scan_webp_vp8l_file(path) {
-            Ok(status) => {
-                if status == ScanResultStatus::StatusMalicious {
-                    result.blastpass = true;
-                }
-            },
-            Err(_) => {}
+    // BLASTPASS scan
+    if let Ok(status) = BLASTPASS::scan_webp_vp8l_file(path) {
+        if status == ScanResultStatus::StatusMalicious {
+            result.blastpass = true;
         }
     }
 
-    // TRIANGULATION scan - only for font files and PDFs
-    if should_scan_for_threat(&file_type, "triangulation") {
-        match TRIANGULATION::scan_ttf_file(path) {
-            Ok(status) => {
-                if status == ScanResultStatus::StatusMalicious {
-                    result.triangulation = true;
-                }
-            },
-            Err(_) => {}
+    // TRIANGULATION scan
+    if let Ok(status) = TRIANGULATION::scan_ttf_file(path) {
+        if status == ScanResultStatus::StatusMalicious {
+            result.triangulation = true;
         }
     }
 
-    // CVE-2025-43300 scan - only for DNG/TIFF files
-    if should_scan_for_threat(&file_type, "cve_2025_43300") {
-        let dng_status = dng::scan_dng_file(path);
-        if dng_status == ScanResultStatus::StatusMalicious {
-            result.cve_2025_43300 = true;
+    // CVE-2025-43300 scan
+    if dng::scan_dng_file(path) == ScanResultStatus::StatusMalicious {
+        result.cve_2025_43300 = true;
+    }
+
+    // If the file is a PDF, extract and scan its streams
+    if path.extension().map_or(false, |ext| ext.eq_ignore_ascii_case("pdf")) {
+        let temp_dir = env::temp_dir().join(format!(
+            "elegant-bouncer-scan-{}",
+            path.file_name().unwrap().to_string_lossy()
+        ));
+
+        if fs::create_dir_all(&temp_dir).is_ok() {
+            if let Ok(doc) = Document::load(path) {
+                for (_, object) in &doc.objects {
+                    if let Ok(stream) = object.as_stream() {
+                        let content = &stream.content;
+                        let temp_file_path = temp_dir.join("stream.bin");
+                        
+                        if fs::write(&temp_file_path, content).is_ok() {
+                            if !result.blastpass {
+                                if let Ok(status) = BLASTPASS::scan_webp_vp8l_file(&temp_file_path) {
+                                    if status == ScanResultStatus::StatusMalicious {
+                                        result.blastpass = true;
+                                    }
+                                }
+                            }
+                            if !result.triangulation {
+                                if let Ok(status) = TRIANGULATION::scan_ttf_file(&temp_file_path) {
+                                    if status == ScanResultStatus::StatusMalicious {
+                                        result.triangulation = true;
+                                    }
+                                }
+                            }
+                            if !result.cve_2025_43300 {
+                                if dng::scan_dng_file(&temp_file_path) == ScanResultStatus::StatusMalicious {
+                                    result.cve_2025_43300 = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Clean up the temporary directory
+            let _ = fs::remove_dir_all(&temp_dir);
         }
     }
 
     result
+}
+
+fn scan_single_file_with_origin(path: &Path, origin: Option<String>) -> ScanResult {
+    let (tx, rx) = mpsc::channel();
+    let path_buf = path.to_path_buf();
+    let origin_clone = origin.clone();
+
+    thread::spawn(move || {
+        let result = do_actual_scan(&path_buf, origin_clone);
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(Duration::from_secs(60)) {
+        Ok(result) => result,
+        Err(_) => {
+            log::warn!("Scanning timed out for file: {}", path.display());
+            ScanResult {
+                file_path: path.to_path_buf(),
+                origin,
+                timed_out: true,
+                forcedentry: false,
+                blastpass: false,
+                triangulation: false,
+                cve_2025_43300: false,
+            }
+        }
+    }
 }
 
 fn print_hashes(filename: &str) -> io::Result<()> {
@@ -280,6 +576,24 @@ fn print_hashes(filename: &str) -> io::Result<()> {
     Ok(())
 }
 
+fn setup_logging(level: LevelFilter) -> Result<()> {
+    let log_filename = format!("elegant-bouncer-{}.log", chrono::Local::now().format("%Y-%m-%d-%H-%M-%S"));
+    fern::Dispatch::new()
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "[{}][{}] {}",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+                record.level(),
+                message
+            ))
+        })
+        .level(level)
+        .chain(std::io::stdout())
+        .chain(fern::log_file(log_filename)?)
+        .apply()?;
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     
@@ -307,19 +621,15 @@ fn main() -> Result<()> {
         println!();
     }
 
-    // Don't initialize logger if in TUI mode to prevent output corruption
-    if !args.tui {
-        let level = if args.verbose {
-            LevelFilter::max()
-        } else {
-            LevelFilter::Info
-        };
-
-        env_logger::Builder::new().filter_level(level).init();
-    }
+    let level = if args.verbose {
+        LevelFilter::Debug
+    } else {
+        LevelFilter::Info
+    };
+    setup_logging(level)?;
 
     if !args.scan && !args.create_forcedentry {
-        println!("You need to supply an action. Run with {} for more information.", "--help".green());
+        log::info!("You need to supply an action. Run with {} for more information.", "--help".green());
         return Ok(());
     }
 
@@ -376,7 +686,7 @@ fn main() -> Result<()> {
             }
         } else if path.is_file() {
             // Single file scan
-            println!("[+] Scanning file: {}", path.display());
+            log::info!("[+] Scanning file: {}", path.display());
             let result = scan_single_file(path);
             all_scan_results.push(result);
             
@@ -384,117 +694,61 @@ fn main() -> Result<()> {
             println!();
             let _ = print_hashes(&args.path);
         } else if path.is_dir() {
-            // Directory scan with progress bar
-            println!("{} Scanning directory: {}", "►".cyan().bold(), path.display().to_string().bright_white());
-            if args.recursive {
-                println!("{} Recursive mode: {}", "►".cyan().bold(), "ENABLED".green());
-            }
-            println!("{} Extensions: {}", "►".cyan().bold(), extensions.join(", ").yellow());
-            println!();
-
-            // First, collect all files to scan
-            let walker = if args.recursive {
-                WalkDir::new(path)
+            let files_found;
+            if args.messaging_only {
+                log::info!("[+] --messaging-only flag set. Skipping general file scan.");
+                all_scan_results = scan_messaging_apps(path);
+                files_found = !all_scan_results.is_empty();
             } else {
-                WalkDir::new(path).max_depth(1)
-            };
+                // --- Full File Scan ---
+                log::info!("[+] Starting general file scan...");
+                let walker = if args.recursive {
+                    WalkDir::new(path)
+                } else {
+                    WalkDir::new(path).max_depth(1)
+                };
 
-            let files_to_scan: Vec<_> = walker
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().is_file())
-                .filter(|e| should_scan_file(e.path(), &extensions))
-                .collect();
+                let files_to_scan: Vec<_> = walker
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().is_file())
+                    .map(|e| (e.into_path(), None))
+                    .filter(|(path, _)| should_scan_file(path, &extensions))
+                    .collect();
+                
+                files_found = !files_to_scan.is_empty();
 
-            if files_to_scan.is_empty() {
-                println!("{} No files found with specified extensions.", "⚠".yellow());
+                let pb = ProgressBar::new(files_to_scan.len() as u64);
+                pb.set_style(ProgressStyle::default_bar()
+                    .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")
+                    .unwrap()
+                    .progress_chars("#>-"));
+
+                all_scan_results = files_to_scan
+                    .par_iter()
+                    .progress_with(pb.clone())
+                    .map(|(file_path, origin)| {
+                        pb.set_message(file_path.display().to_string());
+                        scan_single_file_with_origin(file_path, origin.clone())
+                    })
+                    .collect();
+                
+                pb.finish_with_message("General file scan complete");
+                // --- End Full File Scan ---
+
+                // --- App Scan Phase ---
+                all_scan_results.extend(scan_messaging_apps(path));
+            }
+
+            if !files_found && all_scan_results.is_empty() {
+                log::info!("No files found with specified extensions or in messaging apps.");
                 return Ok(());
             }
 
-            // Create progress bar
-            let pb = Arc::new(ProgressBar::new(files_to_scan.len() as u64));
-            pb.set_style(
-                ProgressStyle::default_bar()
-                    .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")
-                    .unwrap()
-                    .progress_chars("█▓▒░ ")
-                    .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
-            );
-
-            // Use number of CPU cores for parallel scanning
-            let num_threads = num_cpus::get().min(8); // Cap at 8 threads
-            println!("{} Using {} parallel threads", "►".cyan().bold(), num_threads.to_string().green());
-            
-            // Start timing
-            let start_time = Instant::now();
-
-            // Convert files to paths for parallel processing
-            let file_paths: Vec<PathBuf> = files_to_scan.iter()
-                .map(|e| e.path().to_path_buf())
-                .collect();
-
-            // Thread-safe counters
-            let threat_count = Arc::new(Mutex::new(0));
-            let scan_results = Arc::new(Mutex::new(Vec::new()));
-
-            // Parallel scanning with rayon
-            file_paths.par_iter().enumerate().for_each(|(idx, file_path)| {
-                let file_name = file_path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("unknown");
-                
-                pb.set_message(format!("Scanning: {}", file_name));
-                pb.set_position((idx + 1) as u64);
-                
-                let result = scan_single_file(file_path);
-                
-                // Report if any threats found
-                if result.forcedentry || result.blastpass || result.triangulation || result.cve_2025_43300 {
-                    let mut count = threat_count.lock().unwrap();
-                    *count += 1;
-                    
-                    pb.suspend(|| {
-                        print!("  {} {} - ", "✗".red().bold(), file_path.display().to_string().bright_white());
-                        let mut threats = Vec::new();
-                        if result.forcedentry { threats.push("FORCEDENTRY"); }
-                        if result.blastpass { threats.push("BLASTPASS"); }
-                        if result.triangulation { threats.push("TRIANGULATION"); }
-                        if result.cve_2025_43300 { threats.push("CVE-2025-43300"); }
-                        println!("{}", threats.join(", ").red().bold());
-                    });
-                }
-                
-                let mut results = scan_results.lock().unwrap();
-                results.push(result);
-            });
-            
-            // Get final results
-            all_scan_results = Arc::try_unwrap(scan_results)
-                .map(|mutex| mutex.into_inner().unwrap())
-                .unwrap_or_else(|arc| {
-                    let guard = arc.lock().unwrap();
-                    guard.clone()
-                });
-            
-            let final_threat_count = *threat_count.lock().unwrap();
-            
-            // Calculate performance metrics
-            let elapsed = start_time.elapsed();
-            let files_per_sec = if elapsed.as_secs() > 0 {
-                file_paths.len() as f64 / elapsed.as_secs_f64()
-            } else {
-                file_paths.len() as f64
-            };
-            
-            pb.finish_with_message(format!("Completed - {} threats found", final_threat_count));
             println!();
-            println!("{} Scanned {} files in {:.2}s ({:.1} files/sec)", 
-                "✓".green().bold(), 
-                file_paths.len(),
-                elapsed.as_secs_f64(),
-                files_per_sec);
+            log::info!("[+] Detected Threats:");
         } else {
-            eprintln!("Error: Path '{}' does not exist or is not accessible", path.display());
+            log::error!("Error: Path '{}' does not exist or is not accessible", path.display());
             return Ok(());
         }
 
@@ -568,6 +822,7 @@ fn main() -> Result<()> {
             #[derive(Tabled)]
             struct InfectedFile {
                 path: String,
+                origin: String,
                 threat_name: String,
                 cve_ids: String,
             }
@@ -575,11 +830,14 @@ fn main() -> Result<()> {
             let mut infected_details = Vec::new();
             
             for result in &all_scan_results {
+                if result.timed_out { continue; } // Skip timed out files for this table
                 let path_str = result.file_path.display().to_string();
+                let origin_str = result.origin.as_deref().unwrap_or("N/A").to_string();
                 
                 if result.forcedentry {
                     infected_details.push(InfectedFile {
                         path: path_str.clone(),
+                        origin: origin_str.clone(),
                         threat_name: "FORCEDENTRY".to_string(),
                         cve_ids: "CVE-2021-30860".to_string(),
                     });
@@ -588,6 +846,7 @@ fn main() -> Result<()> {
                 if result.blastpass {
                     infected_details.push(InfectedFile {
                         path: path_str.clone(),
+                        origin: origin_str.clone(),
                         threat_name: "BLASTPASS".to_string(),
                         cve_ids: "CVE-2023-4863, CVE-2023-41064".to_string(),
                     });
@@ -596,6 +855,7 @@ fn main() -> Result<()> {
                 if result.triangulation {
                     infected_details.push(InfectedFile {
                         path: path_str.clone(),
+                        origin: origin_str.clone(),
                         threat_name: "TRIANGULATION".to_string(),
                         cve_ids: "CVE-2023-41990".to_string(),
                     });
@@ -604,6 +864,7 @@ fn main() -> Result<()> {
                 if result.cve_2025_43300 {
                     infected_details.push(InfectedFile {
                         path: path_str.clone(),
+                        origin: origin_str.clone(),
                         threat_name: "CVE-2025-43300".to_string(),
                         cve_ids: "CVE-2025-43300".to_string(),
                     });
@@ -618,6 +879,16 @@ fn main() -> Result<()> {
                 println!();
                 let infected_table = Table::new(infected_details).with(Style::rounded()).to_string();
                 println!("{}", infected_table);
+            }
+        }
+
+        // Show timed out files
+        let timed_out_files: Vec<_> = all_scan_results.iter().filter(|r| r.timed_out).collect();
+        if !timed_out_files.is_empty() {
+            println!();
+            println!("{} Timed Out Files (scan took >60s):", "[!]".yellow());
+            for result in timed_out_files {
+                println!("  - {}", result.file_path.display());
             }
         }
     }

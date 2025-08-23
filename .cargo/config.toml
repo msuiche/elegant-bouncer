@@ -1,0 +1,2 @@
+[build]
+rustflags = ["-L", "/opt/homebrew/opt/sqlcipher/lib"]

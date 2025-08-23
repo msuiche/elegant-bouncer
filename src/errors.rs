@@ -34,6 +34,9 @@ pub enum ElegantError {
     #[error("TTF error: {0}")]
     TtfError(TtfError),
 
+    #[error("Logger error: {0}")]
+    SetLoggerError(#[from] log::SetLoggerError),
+
     /*
     #[error("Huffman error: {0}")]
     HuffmanError(HuffmanError),

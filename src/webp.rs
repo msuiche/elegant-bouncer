@@ -466,7 +466,7 @@ fn decode_huffman_tree(reader: &mut VP8LBitReader, alphabet_size: usize, max_tab
 }
 
 pub fn scan_webp_vp8l_file(path: &path::Path) -> Result<ScanResultStatus> {
-    info!("Opening {}...", path.display());
+    // info!("Opening {}...", path.display());
 
     let mut status = ScanResultStatus::StatusOk;
 
@@ -474,7 +474,7 @@ pub fn scan_webp_vp8l_file(path: &path::Path) -> Result<ScanResultStatus> {
     let header = WebpHeader::from_reader(file)?;
 
     if !header.is_valid() {
-        error!("Not a WebP file. Ignore");
+        // error!("Not a WebP file. Ignore");
         return Err(ElegantError::WebpError(WebpError::InvalidFile));
     }
 

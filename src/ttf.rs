@@ -257,7 +257,7 @@ fn is_adjust_inst_present(byte_data: &Vec<u8>) -> Result<bool> {
 }
 
 pub fn scan_ttf_file(path: &path::Path) -> Result<ScanResultStatus> {
-    info!("Opening {}...", path.display());
+    // info!("Opening {}...", path.display());
 
     let mut _status = ScanResultStatus::StatusOk;
 
@@ -360,7 +360,7 @@ pub fn scan_ttf_file(path: &path::Path) -> Result<ScanResultStatus> {
     }
 
     if !header.is_valid() {
-        warn!("Not a TTF file. Ignore");
+        // warn!("Not a TTF file. Ignore");
         return Err(ElegantError::TtfError(TtfError::InvalidFile));
     }
 

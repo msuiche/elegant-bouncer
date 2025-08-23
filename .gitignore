@@ -1,3 +1,8 @@
-/target
-.DS_Store
-TODO.md
+# Log files
+*.log
+
+# Build artifacts
+/target/
+
+# Patch files
+*.patch
