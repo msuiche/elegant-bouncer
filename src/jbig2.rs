@@ -772,7 +772,8 @@ pub fn scan_pdf_jbig2_file(path: &path::Path) -> Result<ScanResultStatus> {
                                     }
                                 },
                                 _ => {
-                                    panic!()
+                                    // Skip non-JBIG2Decode filters
+                                    continue;
                                 }
                             }
                         }
