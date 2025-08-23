@@ -10,7 +10,7 @@
 // Author:
 //  Matt Suiche (msuiche) 28-Dec-2023
 //
-use log::{info, debug, error};
+use log::{info, debug, warn, error};
 use std::path;
 
 use crate::errors::*;
@@ -292,7 +292,7 @@ pub fn scan_ttf_file(path: &path::Path) -> Result<ScanResultStatus> {
     }
 
     if !header.is_valid() {
-        error!("Not a TTF file. Ignore");
+        warn!("Not a TTF file. Ignore");
         return Err(ElegantError::TtfError(TtfError::InvalidFile));
     }
 

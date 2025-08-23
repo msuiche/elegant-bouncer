@@ -24,6 +24,7 @@ sha1 = "0.10.6"
 sha3 = "0.10.8"
 tabled = {version = "0.14.0",  features = ["color"] } 
 thiserror = "1.0.48"
+walkdir = "2.4.0"
 
 [profile.release]
 debug = true

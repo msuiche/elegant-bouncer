@@ -14,7 +14,7 @@
 // 22-Sep-2023 (msuiche) - Initial implementation
 //
 use std::fmt;
-use log::{error, warn, debug};
+use log::{error, warn, debug, trace};
 
 use crate::webp::VP8LBitReader;
 
@@ -186,7 +186,7 @@ impl HTree {
         // println!("n = {} b = {}", n, b);
         if b != 0 {
             if b > LUT_SIZE {
-                warn!("The tree is unbalanced. This is suspicious. (b = {})", b);
+                trace!("The tree is unbalanced. This is suspicious. (b = {})", b);
                 return Ok(n >> 8);
             }
             assert!(b <= LUT_SIZE);

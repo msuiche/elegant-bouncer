@@ -27,21 +27,28 @@ Detection tool for file-based mobile exploits.
 
 A utility designed to detect the presence of known mobile APTs in commonly distributed files.
 
-Usage: elegant-bouncer [OPTIONS] <Input file>
+Usage: elegant-bouncer [OPTIONS] <Input path>
 
 Arguments:
-  <Input file>
-          Path to the input file
+  <Input path>
+          Path to the input file or folder
 
 Options:
   -v, --verbose
           Print extra output while parsing
 
   -s, --scan
-          Assess a given file, checking for known vulnerabilities
+          Assess a given file or folder, checking for known vulnerabilities
 
   -c, --create-forcedentry
           Create a FORCEDENTRY-like PDF
+
+  -r, --recursive
+          Recursively scan subfolders
+
+  -e, --extensions <EXTENSIONS>
+          File extensions to scan (comma-separated, e.g., "pdf,webp,ttf")
+          Default: pdf,gif,webp,jpg,jpeg,png,tif,tiff,dng,ttf,otf
 
   -h, --help
           Print help information (use `-h` for a summary)
@@ -49,8 +56,86 @@ Options:
   -V, --version
           Print version information
 ```
-### scan
-Use `--scan` to assess a given file, checking for known vulnerabilities.
+
+### Scanning Files and Folders
+
+#### Single File Scan
+Use `--scan` to assess a single file for known vulnerabilities:
+```bash
+elegantbouncer --scan suspicious_file.pdf
+```
+
+#### Folder Scan
+Scan all supported files in a directory:
+```bash
+elegantbouncer --scan /path/to/folder
+```
+
+#### Recursive Folder Scan
+Use `-r` flag to recursively scan all subdirectories:
+```bash
+elegantbouncer --scan /path/to/folder -r
+```
+
+#### Custom File Extensions
+Specify which file types to scan using the `-e` flag:
+```bash
+# Scan only PDF and DNG files
+elegantbouncer --scan /path/to/folder -e pdf,dng
+
+# Scan only image files recursively
+elegantbouncer --scan /path/to/folder -r -e jpg,jpeg,png,webp,gif
+```
+
+#### Default Extensions
+By default, the tool scans files with these extensions:
+- **Documents**: pdf
+- **Images**: gif, webp, jpg, jpeg, png, tif, tiff, dng
+- **Fonts**: ttf, otf
+
+### Example Output
+
+When scanning a directory, the tool provides:
+- Real-time progress updates
+- Immediate threat detection notifications
+- Summary table with all vulnerability types
+- Detailed infected files table with:
+  - File path
+  - Threat name
+  - Associated CVE IDs
+
+```
+[+] Scanning directory: /path/to/documents
+[+] Recursive mode enabled
+[+] Extensions: pdf, gif, webp, jpg, jpeg, png, tif, tiff, dng, ttf, otf
+
+[1] Scanning: /path/to/documents/invoice.pdf
+[2] Scanning: /path/to/documents/photo.jpg
+[3] Scanning: /path/to/documents/malicious.webp
+  └─ THREAT found: BLASTPASS
+[4] Scanning: /path/to/documents/report.pdf
+  └─ THREAT found: FORCEDENTRY
+
+[+] Scanned 4 files
+
+[+] Summary Results:
+╭────────────────┬───────────────────────────────┬──────────────────────────────────────────────────────────────────────────┬──────────╮
+│ name           │ cve_ids                       │ description                                                              │ detected │
+├────────────────┼───────────────────────────────┼──────────────────────────────────────────────────────────────────────────┼──────────┤
+│ FORCEDENTRY    │ CVE-2021-30860                │ Malicious JBIG2 PDF shared over iMessage                                 │ Yes      │
+│ BLASTDOOR      │ CVE-2023-4863, CVE-2023-41064 │ Malicious WebP presumably shared over iMessage and other mediums         │ Yes      │
+│ TRIANGULATION  │ CVE-2023-41990                │ Maliciously crafted TrueType font embedded in PDFs shared over iMessage  │ No       │
+│ CVE-2025-43300 │ CVE-2025-43300                │ Malicious DNG with JPEG Lossless compression exploiting RawCamera.bundle │ No       │
+╰────────────────┴───────────────────────────────┴──────────────────────────────────────────────────────────────────────────┴──────────╯
+
+[!] Infected Files Details:
+╭────────────────────────────────┬─────────────┬───────────────────────────────╮
+│ path                           │ threat_name │ cve_ids                       │
+├────────────────────────────────┼─────────────┼───────────────────────────────┤
+│ /path/to/documents/report.pdf  │ FORCEDENTRY │ CVE-2021-30860                │
+│ /path/to/documents/malicious.webp │ BLASTPASS   │ CVE-2023-4863, CVE-2023-41064 │
+╰────────────────────────────────┴─────────────┴───────────────────────────────╯
+```
 
 ### create-forcedentry
 Use `--create-forcedentry` to generate a PDF from the ground up designed to exploit CVE-2021-30860. Work in progress.
