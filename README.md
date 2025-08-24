@@ -19,6 +19,12 @@ It employs an innovative approach for advanced file-based threat identification,
 - [FORCEDENTRY](documentation/FORCEDENTRY.md)
 - [BLASTPASS](documentation/BLASTPASS.md)
 
+## Terminal User Interface
+
+![ELEGANTBOUNCER TUI - Real-time parallel scanning visualization](./documentation/elegant-bouncer-tui.png)
+
+The TUI mode provides real-time visualization of parallel scanning operations, showing all active worker threads simultaneously. Enable it with the `--tui` flag when scanning directories.
+
 ## Getting started
 ```
 elegant-bouncer v0.2
