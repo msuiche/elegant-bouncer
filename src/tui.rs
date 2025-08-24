@@ -26,15 +26,16 @@ use crossterm::{
 };
 use std::{
     io,
-    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},
+    sync::{Arc, Mutex, atomic::{AtomicBool, AtomicUsize, Ordering}},
     time::{Duration, Instant},
     path::PathBuf,
     thread,
 };
+use rayon::prelude::*;
 
 #[derive(Clone)]
 pub struct TUIState {
-    pub current_file: String,
+    pub current_files: Vec<String>,  // Changed to show multiple active files
     pub files_scanned: usize,
     pub total_files: usize,
     pub threats: Vec<ThreatInfo>,
@@ -63,7 +64,7 @@ impl App {
     pub fn new(files: Vec<PathBuf>) -> Self {
         App {
             state: Arc::new(Mutex::new(TUIState {
-                current_file: String::new(),
+                current_files: Vec::new(),
                 files_scanned: 0,
                 total_files: files.len(),
                 threats: Vec::new(),
@@ -104,29 +105,43 @@ pub fn run_tui_scan(files: Vec<PathBuf>) -> Result<Vec<crate::ScanResult>, Box<d
     let should_quit_clone = Arc::clone(&app.lock().unwrap().should_quit);
     let mut scan_results = Vec::new();
 
-    // Start scanning in background thread
+    // Start scanning in background thread with parallelization
     let scan_handle = thread::spawn(move || {
-        let mut results = Vec::new();
         let files = files.clone();
+        let results = Arc::new(Mutex::new(Vec::new()));
+        let files_scanned = Arc::new(AtomicUsize::new(0));
+        let active_files = Arc::new(Mutex::new(Vec::<String>::new()));
         
-        for (idx, file_path) in files.iter().enumerate() {
+        // Use parallel iterator for scanning
+        files.par_iter().enumerate().for_each(|(idx, file_path)| {
             // Check if we should abort
             if should_quit_clone.load(Ordering::Relaxed) {
-                let app = app_clone.lock().unwrap();
-                let mut state = app.state.lock().unwrap();
-                state.current_status = "Scan aborted by user".to_string();
-                break;
+                return;
             }
             
-            // Update current file
+            let thread_id = rayon::current_thread_index().unwrap_or(0);
+            let file_name = file_path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            
+            // Add this file to active files for this thread
             {
                 let app = app_clone.lock().unwrap();
                 let mut state = app.state.lock().unwrap();
-                state.current_file = file_path.display().to_string();
-                state.files_scanned = idx;
-                state.current_status = format!("Scanning: {}", file_path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("unknown"));
+                
+                // Ensure we have enough slots for all threads
+                while state.current_files.len() <= thread_id {
+                    state.current_files.push(String::new());
+                }
+                
+                // Update this thread's current file
+                state.current_files[thread_id] = format!("[Thread {}] {}", thread_id + 1, file_name);
+                state.current_status = format!("Processing {} files in parallel [{}/{}]", 
+                    state.current_files.iter().filter(|s| !s.is_empty()).count(),
+                    files_scanned.load(Ordering::Relaxed),
+                    files.len()
+                );
             }
 
             // Scan the file
@@ -170,21 +185,44 @@ pub fn run_tui_scan(files: Vec<PathBuf>) -> Result<Vec<crate::ScanResult>, Box<d
                     });
                 }
                 
-                state.files_scanned = idx + 1;
+                // Update files scanned count
+                let count = files_scanned.fetch_add(1, Ordering::Relaxed) + 1;
+                state.files_scanned = count;
             }
             
-            results.push(result);
-        }
+            // Store result
+            {
+                let mut res = results.lock().unwrap();
+                res.push(result);
+            }
+            
+            // Clear this thread's current file when done
+            {
+                let app = app_clone.lock().unwrap();
+                let mut state = app.state.lock().unwrap();
+                if thread_id < state.current_files.len() {
+                    state.current_files[thread_id].clear();
+                }
+            }
+        });
         
-        // Mark scan as complete
-        {
+        // Check if aborted
+        if should_quit_clone.load(Ordering::Relaxed) {
+            let app = app_clone.lock().unwrap();
+            let mut state = app.state.lock().unwrap();
+            state.current_status = "Scan aborted by user".to_string();
+        } else {
+            // Mark scan as complete
             let app = app_clone.lock().unwrap();
             let mut state = app.state.lock().unwrap();
             state.scan_complete = true;
             state.current_status = "Scan Complete".to_string();
         }
         
-        results
+        // Return results
+        Arc::try_unwrap(results)
+            .map(|mutex| mutex.into_inner().unwrap())
+            .unwrap_or_else(|arc| arc.lock().unwrap().clone())
     });
 
     // Main UI loop
@@ -205,17 +243,8 @@ pub fn run_tui_scan(files: Vec<PathBuf>) -> Result<Vec<crate::ScanResult>, Box<d
                 }
             }
         }
-
-        // Check if scan is complete
-        {
-            let app = app.lock().unwrap();
-            let state = app.state.lock().unwrap();
-            if state.scan_complete && !user_quit {
-                // Auto-close after a short delay if scan is complete
-                thread::sleep(Duration::from_secs(1));
-                break;
-            }
-        }
+        
+        // Don't auto-exit - let user review results and quit when ready
     }
 
     // Signal abort if user quit
@@ -398,26 +427,46 @@ fn draw_current_scan(f: &mut Frame, area: Rect, state: &TUIState) {
         Color::Yellow
     };
 
-    let content = vec![
+    let mut content = vec![
         Line::from(vec![
             Span::styled("Status: ", Style::default().fg(Color::Gray)),
             Span::styled(&state.current_status, Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled("Current File:", Style::default().fg(Color::Gray)),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                if state.current_file.is_empty() { 
-                    "Waiting...".to_string() 
-                } else { 
-                    state.current_file.clone() 
-                },
-                Style::default().fg(Color::White)
-            ),
+            Span::styled("Active Scans:", Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)),
         ]),
     ];
+    
+    // Show all active scanning threads
+    let active_files: Vec<&String> = state.current_files.iter()
+        .filter(|f| !f.is_empty())
+        .collect();
+    
+    if state.scan_complete {
+        content.push(Line::from(vec![
+            Span::styled("  ✓ All files processed successfully", Style::default().fg(Color::Green)),
+        ]));
+        content.push(Line::from(""));
+        content.push(Line::from(vec![
+            Span::styled(format!("  Total: {} files scanned", state.files_scanned), Style::default().fg(Color::White)),
+        ]));
+        content.push(Line::from(vec![
+            Span::styled(format!("  Threats: {} detected", state.threats.len()), 
+                Style::default().fg(if state.threats.is_empty() { Color::Green } else { Color::Red })),
+        ]));
+    } else if active_files.is_empty() {
+        content.push(Line::from(vec![
+            Span::styled("  Waiting for files...", Style::default().fg(Color::DarkGray)),
+        ]));
+    } else {
+        for file in active_files.iter().take(8) {  // Show up to 8 active threads
+            content.push(Line::from(vec![
+                Span::styled("  • ", Style::default().fg(Color::Cyan)),
+                Span::styled(file.as_str(), Style::default().fg(Color::White)),
+            ]));
+        }
+    }
 
     let paragraph = Paragraph::new(content)
         .block(
@@ -441,7 +490,13 @@ fn draw_statistics(f: &mut Frame, area: Rect, state: &TUIState) {
         0.0
     };
 
+    let num_threads = num_cpus::get().min(8);
+    
     let stats = vec![
+        Line::from(vec![
+            Span::styled("Parallel Threads: ", Style::default().fg(Color::Gray)),
+            Span::styled(format!("{}", num_threads), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        ]),
         Line::from(vec![
             Span::styled("Elapsed Time: ", Style::default().fg(Color::Gray)),
             Span::styled(format!("{:02}:{:02}", elapsed.as_secs() / 60, elapsed.as_secs() % 60), 
@@ -526,23 +581,21 @@ fn draw_threats(f: &mut Frame, area: Rect, state: &TUIState, scroll: usize) {
 fn draw_footer(f: &mut Frame, area: Rect, state: &TUIState) {
     let footer_text = if state.scan_complete {
         vec![
-            Span::styled("Scan Complete! ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::raw("Press "),
+            Span::styled("✓ Scan Complete! ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw("Review results and press "),
             Span::styled("q", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw(" to exit | "),
-            Span::styled("Tab", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw(" to switch views | "),
+            Span::raw(" when done | "),
             Span::styled("↑↓", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw(" to scroll"),
+            Span::raw(" to scroll threats"),
         ]
     } else {
         vec![
-            Span::styled("Scanning... ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("⟳ Scanning... ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw("Press "),
             Span::styled("q", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw(" to abort | "),
-            Span::styled("Tab", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw(" to switch views"),
+            Span::styled("↑↓", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(" to scroll"),
         ]
     };
 

@@ -27,6 +27,9 @@ use std::path::{Path, PathBuf};
 use colored::*;
 use walkdir::WalkDir;
 use indicatif::{ProgressBar, ProgressStyle};
+use rayon::prelude::*;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use env_logger;
 use log::LevelFilter;
@@ -156,6 +159,35 @@ pub struct ScanResult {
     pub cve_2025_43300: bool,
 }
 
+fn get_file_type(path: &Path) -> Option<String> {
+    // Get extension and convert to lowercase
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_lowercase())
+}
+
+fn should_scan_for_threat(file_type: &str, threat_type: &str) -> bool {
+    match threat_type {
+        "forcedentry" => {
+            // FORCEDENTRY is in PDFs with JBIG2
+            matches!(file_type, "pdf" | "gif")
+        }
+        "blastpass" => {
+            // BLASTPASS is in WebP files
+            matches!(file_type, "webp" | "pdf")
+        }
+        "triangulation" => {
+            // TRIANGULATION is in TrueType fonts
+            matches!(file_type, "ttf" | "otf" | "pdf")  // PDFs can embed fonts
+        }
+        "cve_2025_43300" => {
+            // CVE-2025-43300 is in DNG files
+            matches!(file_type, "dng" | "tif" | "tiff")
+        }
+        _ => true
+    }
+}
+
 pub fn scan_single_file(path: &Path) -> ScanResult {
     let mut result = ScanResult {
         file_path: path.to_path_buf(),
@@ -165,40 +197,53 @@ pub fn scan_single_file(path: &Path) -> ScanResult {
         cve_2025_43300: false,
     };
 
-    // FORCEDENTRY scan
-    match FORCEDENTRY::scan_pdf_jbig2_file(path) {
-        Ok(status) => {
-            if status == ScanResultStatus::StatusMalicious {
-                result.forcedentry = true;
-            }
-        },
-        Err(_) => {}
+    // Determine file type once
+    let file_type = get_file_type(path).unwrap_or_else(|| "unknown".to_string());
+
+    // Only run relevant scanners based on file type
+    
+    // FORCEDENTRY scan - only for PDFs and GIFs
+    if should_scan_for_threat(&file_type, "forcedentry") {
+        match FORCEDENTRY::scan_pdf_jbig2_file(path) {
+            Ok(status) => {
+                if status == ScanResultStatus::StatusMalicious {
+                    result.forcedentry = true;
+                }
+            },
+            Err(_) => {}
+        }
     }
 
-    // BLASTPASS scan
-    match BLASTPASS::scan_webp_vp8l_file(path) {
-        Ok(status) => {
-            if status == ScanResultStatus::StatusMalicious {
-                result.blastpass = true;
-            }
-        },
-        Err(_) => {}
+    // BLASTPASS scan - only for image files
+    if should_scan_for_threat(&file_type, "blastpass") {
+        match BLASTPASS::scan_webp_vp8l_file(path) {
+            Ok(status) => {
+                if status == ScanResultStatus::StatusMalicious {
+                    result.blastpass = true;
+                }
+            },
+            Err(_) => {}
+        }
     }
 
-    // TRIANGULATION scan
-    match TRIANGULATION::scan_ttf_file(path) {
-        Ok(status) => {
-            if status == ScanResultStatus::StatusMalicious {
-                result.triangulation = true;
-            }
-        },
-        Err(_) => {}
+    // TRIANGULATION scan - only for font files and PDFs
+    if should_scan_for_threat(&file_type, "triangulation") {
+        match TRIANGULATION::scan_ttf_file(path) {
+            Ok(status) => {
+                if status == ScanResultStatus::StatusMalicious {
+                    result.triangulation = true;
+                }
+            },
+            Err(_) => {}
+        }
     }
 
-    // CVE-2025-43300 scan
-    let dng_status = dng::scan_dng_file(path);
-    if dng_status == ScanResultStatus::StatusMalicious {
-        result.cve_2025_43300 = true;
+    // CVE-2025-43300 scan - only for DNG/TIFF files
+    if should_scan_for_threat(&file_type, "cve_2025_43300") {
+        let dng_status = dng::scan_dng_file(path);
+        if dng_status == ScanResultStatus::StatusMalicious {
+            result.cve_2025_43300 = true;
+        }
     }
 
     result
@@ -366,7 +411,7 @@ fn main() -> Result<()> {
             }
 
             // Create progress bar
-            let pb = ProgressBar::new(files_to_scan.len() as u64);
+            let pb = Arc::new(ProgressBar::new(files_to_scan.len() as u64));
             pb.set_style(
                 ProgressStyle::default_bar()
                     .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")
@@ -375,9 +420,24 @@ fn main() -> Result<()> {
                     .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
             );
 
-            let mut threat_count = 0;
-            for (idx, entry) in files_to_scan.iter().enumerate() {
-                let file_path = entry.path();
+            // Use number of CPU cores for parallel scanning
+            let num_threads = num_cpus::get().min(8); // Cap at 8 threads
+            println!("{} Using {} parallel threads", "►".cyan().bold(), num_threads.to_string().green());
+            
+            // Start timing
+            let start_time = Instant::now();
+
+            // Convert files to paths for parallel processing
+            let file_paths: Vec<PathBuf> = files_to_scan.iter()
+                .map(|e| e.path().to_path_buf())
+                .collect();
+
+            // Thread-safe counters
+            let threat_count = Arc::new(Mutex::new(0));
+            let scan_results = Arc::new(Mutex::new(Vec::new()));
+
+            // Parallel scanning with rayon
+            file_paths.par_iter().enumerate().for_each(|(idx, file_path)| {
                 let file_name = file_path.file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("unknown");
@@ -389,7 +449,9 @@ fn main() -> Result<()> {
                 
                 // Report if any threats found
                 if result.forcedentry || result.blastpass || result.triangulation || result.cve_2025_43300 {
-                    threat_count += 1;
+                    let mut count = threat_count.lock().unwrap();
+                    *count += 1;
+                    
                     pb.suspend(|| {
                         print!("  {} {} - ", "✗".red().bold(), file_path.display().to_string().bright_white());
                         let mut threats = Vec::new();
@@ -401,12 +463,35 @@ fn main() -> Result<()> {
                     });
                 }
                 
-                all_scan_results.push(result);
-            }
+                let mut results = scan_results.lock().unwrap();
+                results.push(result);
+            });
             
-            pb.finish_with_message(format!("Completed - {} threats found", threat_count));
+            // Get final results
+            all_scan_results = Arc::try_unwrap(scan_results)
+                .map(|mutex| mutex.into_inner().unwrap())
+                .unwrap_or_else(|arc| {
+                    let guard = arc.lock().unwrap();
+                    guard.clone()
+                });
+            
+            let final_threat_count = *threat_count.lock().unwrap();
+            
+            // Calculate performance metrics
+            let elapsed = start_time.elapsed();
+            let files_per_sec = if elapsed.as_secs() > 0 {
+                file_paths.len() as f64 / elapsed.as_secs_f64()
+            } else {
+                file_paths.len() as f64
+            };
+            
+            pb.finish_with_message(format!("Completed - {} threats found", final_threat_count));
             println!();
-            println!("{} Scanned {} files", "✓".green().bold(), files_to_scan.len());
+            println!("{} Scanned {} files in {:.2}s ({:.1} files/sec)", 
+                "✓".green().bold(), 
+                file_paths.len(),
+                elapsed.as_secs_f64(),
+                files_per_sec);
         } else {
             eprintln!("Error: Path '{}' does not exist or is not accessible", path.display());
             return Ok(());

@@ -773,6 +773,7 @@ pub fn scan_pdf_jbig2_file(path: &path::Path) -> Result<ScanResultStatus> {
                                 },
                                 _ => {
                                     // Skip non-JBIG2Decode filters
+                                    // We assume it's the first object.
                                     continue;
                                 }
                             }
