@@ -4,3 +4,4 @@ pub mod ttf;
 pub mod dng;
 pub mod errors;
 pub mod huffman;
+pub mod messaging;

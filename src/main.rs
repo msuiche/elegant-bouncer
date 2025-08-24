@@ -22,6 +22,7 @@ mod dng;
 mod errors;
 mod huffman;
 mod tui;
+mod messaging;
 
 use std::path::{Path, PathBuf};
 use colored::*;
@@ -80,6 +81,10 @@ struct Args {
     /// Use Terminal User Interface for scanning
     #[clap(long)]
     tui: bool,
+
+    /// Scan messaging app databases for attachments (iOS backup format)
+    #[clap(short = 'm', long)]
+    messaging: bool,
 
     /// File extensions to scan (comma-separated, e.g., "pdf,webp,ttf")
     /// Default: pdf,gif,webp,jpg,jpeg,png,tif,tiff,dng,ttf,otf
@@ -334,8 +339,46 @@ fn main() -> Result<()> {
         let extensions = args.extensions.unwrap_or_else(get_default_extensions);
         let mut all_scan_results = Vec::new();
 
+        // Check for messaging app scan mode
+        if args.messaging {
+            println!();
+            println!("{} iOS Messaging App Attachment Scan", "►".cyan().bold());
+            println!();
+            println!("This mode scans iOS backup directories for messaging app databases");
+            println!("and analyzes all attachments for known mobile exploits.");
+            println!();
+            
+            let messaging_results = messaging::scan_messaging_apps(path);
+            
+            if !messaging_results.is_empty() {
+                println!();
+                println!("{} Found {} infected attachments in messaging apps", 
+                    "⚠".red().bold(), 
+                    messaging_results.len());
+                
+                // Convert messaging results to scan results
+                for msg_result in messaging_results {
+                    // Display infected file with origin first
+                    println!("  {} {} ({})", 
+                        "✗".red().bold(),
+                        msg_result.file_path.display(),
+                        msg_result.origin.yellow()
+                    );
+                    
+                    all_scan_results.push(ScanResult {
+                        file_path: msg_result.file_path,
+                        forcedentry: msg_result.forcedentry,
+                        blastpass: msg_result.blastpass,
+                        triangulation: msg_result.triangulation,
+                        cve_2025_43300: msg_result.cve_2025_43300,
+                    });
+                }
+            } else {
+                println!("{} No infected attachments found in messaging apps", "✓".green().bold());
+                return Ok(());
+            }
         // Use TUI mode if requested
-        if args.tui {
+        } else if args.tui {
             // Collect files to scan
             let mut files_to_scan = Vec::new();
             
