@@ -262,6 +262,7 @@ pub fn scan_ttf_file(path: &path::Path) -> Result<ScanResultStatus> {
     let mut _status = ScanResultStatus::StatusOk;
 
     let mut file = File::open(path)?;
+    // TODO: check magic number
     let header = TtfHeader::from_reader(&file)?;
 
     debug!("header.ver = {:x}", header.offset_table.version);

@@ -174,11 +174,12 @@ fn should_scan_for_threat(file_type: &str, threat_type: &str) -> bool {
         }
         "blastpass" => {
             // BLASTPASS is in WebP files
-            matches!(file_type, "webp" | "pdf")
+            matches!(file_type, "webp" )
         }
         "triangulation" => {
             // TRIANGULATION is in TrueType fonts
-            matches!(file_type, "ttf" | "otf" | "pdf")  // PDFs can embed fonts
+            // PDFs can embed fonts but we don't parse fonts from PDFs atm.
+            matches!(file_type, "ttf" | "otf" )
         }
         "cve_2025_43300" => {
             // CVE-2025-43300 is in DNG files
