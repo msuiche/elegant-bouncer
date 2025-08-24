@@ -23,6 +23,7 @@ mod errors;
 mod huffman;
 mod tui;
 mod messaging;
+mod ios_backup;
 
 use std::path::{Path, PathBuf};
 use colored::*;
@@ -85,6 +86,18 @@ struct Args {
     /// Scan messaging app databases for attachments (iOS backup format)
     #[clap(short = 'm', long)]
     messaging: bool,
+
+    /// Extract/reconstruct iOS backup to readable folder structure
+    #[clap(long)]
+    ios_extract: bool,
+
+    /// Output directory for iOS backup extraction
+    #[clap(short = 'o', long)]
+    output: Option<String>,
+
+    /// Force overwrite of output directory if not empty
+    #[clap(short = 'f', long)]
+    force: bool,
 
     /// File extensions to scan (comma-separated, e.g., "pdf,webp,ttf")
     /// Default: pdf,gif,webp,jpg,jpeg,png,tif,tiff,dng,ttf,otf
@@ -323,12 +336,36 @@ fn main() -> Result<()> {
         env_logger::Builder::new().filter_level(level).init();
     }
 
-    if !args.scan && !args.create_forcedentry {
+    if !args.scan && !args.create_forcedentry && !args.ios_extract {
         println!("You need to supply an action. Run with {} for more information.", "--help".green());
         return Ok(());
     }
 
     let path = Path::new(&args.path);
+
+    // Handle iOS backup extraction
+    if args.ios_extract {
+        println!();
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!();
+        println!("                 {} iOS BACKUP RECONSTRUCTOR", "🔧".cyan());
+        println!("            Extracting iOS backup to readable structure");
+        println!();
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!();
+        
+        let output_path = args.output.as_ref().map(Path::new);
+        match ios_backup::extract_ios_backup(path, output_path, args.force) {
+            Ok(_) => {
+                println!("{} iOS backup extraction completed successfully!", "✓".green().bold());
+            }
+            Err(e) => {
+                eprintln!("{} Failed to extract iOS backup: {}", "✗".red().bold(), e);
+                return Ok(());
+            }
+        }
+        return Ok(());
+    }
 
     if args.create_forcedentry {
         return FORCEDENTRY::create(path);

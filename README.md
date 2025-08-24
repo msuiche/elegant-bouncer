@@ -52,6 +52,18 @@ Options:
   -r, --recursive
           Recursively scan subfolders
 
+  -m, --messaging
+          Scan messaging app databases for attachments (iOS backup format)
+
+  --ios-extract
+          Extract/reconstruct iOS backup to readable folder structure
+
+  -o, --output <OUTPUT>
+          Output directory for iOS backup extraction
+
+  -f, --force
+          Force overwrite of output directory if not empty
+
   -e, --extensions <EXTENSIONS>
           File extensions to scan (comma-separated, e.g., "pdf,webp,ttf")
           Default: pdf,gif,webp,jpg,jpeg,png,tif,tiff,dng,ttf,otf
@@ -143,6 +155,39 @@ When scanning a directory, the tool provides:
 ╰────────────────────────────────┴─────────────┴───────────────────────────────╯
 ```
 
+### iOS Backup Analysis
+
+#### Extract iOS Backup Structure
+Reconstruct an iOS backup to its readable folder structure:
+```bash
+# Extract backup to default location (creates _reconstructed folder)
+elegantbouncer --ios-extract /path/to/ios/backup
+
+# Extract to specific output directory
+elegantbouncer --ios-extract /path/to/ios/backup -o /path/to/output
+
+# Force overwrite if output directory exists
+elegantbouncer --ios-extract /path/to/ios/backup -o /path/to/output --force
+```
+
+#### Scan Messaging App Attachments
+Scan iOS backup for malicious attachments in messaging apps:
+```bash
+# Scan messaging databases (iMessage, WhatsApp, Viber, Signal, Telegram)
+elegantbouncer --scan --messaging /path/to/ios/backup
+
+# Combine with extraction for complete analysis
+elegantbouncer --ios-extract /path/to/ios/backup -o /tmp/extracted
+elegantbouncer --scan --messaging /tmp/extracted
+```
+
+This feature detects threats in attachments from:
+- **iMessage** - SMS/MMS database attachments
+- **WhatsApp** - Media files from chats
+- **Viber** - Shared files and media
+- **Signal** - Attachments folder (database is encrypted)
+- **Telegram** - Cached media files
+
 ### create-forcedentry
 Use `--create-forcedentry` to generate a PDF from the ground up designed to exploit CVE-2021-30860. Work in progress.
 
@@ -152,6 +197,7 @@ Note: Pre-made samples can be found in the [`samples/`](tests/samples/) director
 Use [**Lockdown Mode**](https://support.apple.com/en-us/HT212650) to decrease your attack surface if you think you are a person of interest.
 
 ## Acknowledgements
+- [Hamid K. (@Hamid-K)](https://github.com/Hamid-K) for the original implementation of messaging app scanning and iOS backup reconstruction
 - [Valentin Pashkov, Mikhail Vinogradov, Georgy Kucherin (@kucher1n), Leonid Bezvershenko (@bzvr_), and Boris Larin (@oct0xor) of Kaspersky](https://securelist.com/operation-triangulation-the-last-hardware-mystery/111669/)
 - [Apple Security Engineering and Architecture (SEAR)](https://bugs.chromium.org/p/chromium/issues/detail?id=1479274)
 - [Bill Marczack](https://twitter.com/@billmarczak)
