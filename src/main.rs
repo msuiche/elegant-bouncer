@@ -304,24 +304,31 @@ fn main() -> Result<()> {
     // Print clean header only if not in TUI mode
     if !args.tui {
         println!();
-        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        println!();
-        println!("                    {} v{}", "ELEGANTBOUNCER".green().bold(), CRATE_VERSION.cyan().bold());
-        println!("          Detection Tool for File-Based Mobile Exploits");
-        println!();
-        println!("  {}: {} • {} • {} • {}", 
-            "Threats".yellow().bold(),
-            "FORCEDENTRY".bright_red(),
-            "BLASTPASS".bright_red(),
-            "TRIANGULATION".bright_red(),
-            "CVE-2025-43300".bright_red()
+        println!("  {} v{}", 
+            "ELEGANTBOUNCER".green().bold(),
+            CRATE_VERSION
         );
-        println!();
-        println!("  {} Matt Suiche (@msuiche)", "Author:".bright_blue());
-        println!("  {} https://github.com/msuiche/elegant-bouncer", "GitHub:".bright_blue());
-        println!("  {} https://www.msuiche.com", "Website:".bright_blue());
-        println!();
-        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!("  File Based Detection Tool");
+        println!("  {}", "────────────────────────────────────────────────────────────────".bright_black());
+        println!("  Threat Detection Capabilities:");
+        println!("    {}  CVE-2021-30860", 
+            "FORCEDENTRY    ".red()
+        );
+        println!("    {}  CVE-2023-4863, CVE-2023-41064", 
+            "BLASTPASS      ".red()
+        );
+        println!("    {}  CVE-2023-41990", 
+            "TRIANGULATION  ".red()
+        );
+        println!("    {}  CVE-2025-43300", 
+            "DNG EXPLOIT    ".red()
+        );
+        println!("  {}", "────────────────────────────────────────────────────────────────".bright_black());
+        println!("  {}:     Matt Suiche (@msuiche)", "Author".bright_black());
+        println!("  {}:     https://github.com/msuiche/elegant-bouncer", "GitHub".bright_black());
+        println!("  {}:    https://www.msuiche.com", "Website".bright_black());
+        println!("  {}:  Copyright © 2025 Matt Suiche. All rights reserved.", "Copyright".bright_black());
+        println!("  {}:    Licensed under CC BY-NC-SA 4.0 (Non-Commercial Use Only)", "License".bright_black());
         println!();
     }
 
