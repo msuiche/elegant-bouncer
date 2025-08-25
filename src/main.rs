@@ -208,6 +208,10 @@ fn should_scan_for_threat(file_type: &str, threat_type: &str) -> bool {
 }
 
 pub fn scan_single_file(path: &Path) -> ScanResult {
+    scan_single_file_with_name(path, None)
+}
+
+pub fn scan_single_file_with_name(path: &Path, original_name: Option<&str>) -> ScanResult {
     let mut result = ScanResult {
         file_path: path.to_path_buf(),
         forcedentry: false,
@@ -216,8 +220,15 @@ pub fn scan_single_file(path: &Path) -> ScanResult {
         cve_2025_43300: false,
     };
 
-    // Determine file type once
-    let file_type = get_file_type(path).unwrap_or_else(|| "unknown".to_string());
+    // debug!("Scanning file: {:?}", path);
+    // debug!("Original name: {:?}", original_name);
+
+    // Determine file type - use original name if provided (for iOS backups), otherwise use actual path
+    let file_type = if let Some(name) = original_name {
+        get_file_type(Path::new(name))
+    } else {
+        get_file_type(path)
+    }.unwrap_or_else(|| "unknown".to_string());
 
     // Only run relevant scanners based on file type
     
@@ -392,34 +403,17 @@ fn main() -> Result<()> {
         let extensions = args.extensions.unwrap_or_else(get_default_extensions);
         let mut all_scan_results = Vec::new();
 
-        // Auto-detect iOS backup structure if not explicitly set
+        // Check if this is an unreconstructed iOS backup
+        let is_ios_backup = path.is_dir() && ios_backup::is_ios_backup(path);
+        
+        // Auto-detect iOS backup and enable messaging mode if it's an iOS backup
         let mut messaging_mode = args.messaging;
-
-        /*
-        // Disabled for now in case the user wants to scan a single file or do recursive scanning.
-        if !messaging_mode && path.is_dir() {
-            let has_home_domain = path.join("HomeDomain").exists();
-            let has_media_domain = path.join("MediaDomain").exists();
-            // let has_manifest_db = path.join("Manifest.db").exists();
-            
-            // Check for AppDomainGroup folders (common pattern in iOS backups)
-            let has_app_domain_group = path.read_dir()
-                .map(|entries| {
-                    entries.filter_map(|e| e.ok())
-                        .any(|entry| {
-                            entry.file_name().to_string_lossy().starts_with("AppDomainGroup-")
-                        })
-                })
-                .unwrap_or(false);
-            
-            if (has_home_domain || has_media_domain || has_app_domain_group) {
-                messaging_mode = true;
-                if !args.tui {
-                    println!("{} Detected iOS backup structure, enabling messaging attachment scan", "[+]".green());
-                }
+        if !messaging_mode && is_ios_backup {
+            messaging_mode = true;
+            if !args.tui {
+                println!("{} Detected iOS backup, enabling messaging attachment scan", "[+]".green());
             }
         }
-        */
 
         // Collect files to scan based on mode
         let mut files_to_scan: Vec<PathBuf> = Vec::new();
@@ -446,7 +440,8 @@ fn main() -> Result<()> {
             // Extract file paths and origins for scanning
             for attachment in messaging_attachments {
                 files_to_scan.push(attachment.file_path);
-                file_origins.push(Some(attachment.origin));
+                // Store the original filename for proper file type detection
+                file_origins.push(Some(attachment.original_name));
             }
             
             if !args.tui {
@@ -482,8 +477,14 @@ fn main() -> Result<()> {
                 return Ok(());
             }
 
-            // Run TUI scan
-            match tui::run_tui_scan(files_to_scan) {
+            // Run TUI scan with origins if available
+            let tui_result = if !file_origins.is_empty() {
+                tui::run_tui_scan_with_origins(files_to_scan, file_origins)
+            } else {
+                tui::run_tui_scan(files_to_scan)
+            };
+            
+            match tui_result {
                 Ok(results) => {
                     all_scan_results = results;
                     // Exit after TUI completes - the TUI already shows results
@@ -542,9 +543,14 @@ fn main() -> Result<()> {
                     .unwrap_or("unknown");
                 
                 // Include origin in message if available
-                let message = if args.messaging && idx < file_origins.len() {
+                let message = if idx < file_origins.len() {
                     if let Some(ref origin) = file_origins[idx] {
-                        format!("Scanning: {} ({})", file_name, origin)
+                        // For iOS backup files, show the original path
+                        if is_ios_backup {
+                            format!("Scanning: {}", origin)
+                        } else {
+                            format!("Scanning: {} ({})", file_name, origin)
+                        }
                     } else {
                         format!("Scanning: {}", file_name)
                     }
@@ -555,7 +561,19 @@ fn main() -> Result<()> {
                 pb.set_message(message);
                 pb.set_position((idx + 1) as u64);
                 
-                let result = scan_single_file(file_path);
+                // For iOS backups, pass the original filename so file type detection works
+                let result = if is_ios_backup && idx < file_origins.len() {
+                    if let Some(ref origin) = file_origins[idx] {
+                        // Extract just the filename from the full iOS path
+                        let original_name = Path::new(origin).file_name()
+                            .and_then(|n| n.to_str());
+                        scan_single_file_with_name(file_path, original_name)
+                    } else {
+                        scan_single_file(file_path)
+                    }
+                } else {
+                    scan_single_file(file_path)
+                };
                 
                 // Report if any threats found
                 if result.forcedentry || result.blastpass || result.triangulation || result.cve_2025_43300 {
@@ -563,7 +581,18 @@ fn main() -> Result<()> {
                     *count += 1;
                     
                     pb.suspend(|| {
-                        print!("  {} {} - ", "✗".red().bold(), file_path.display().to_string().bright_white());
+                        // Show iOS original path if available, otherwise show the file path
+                        let display_path = if is_ios_backup && idx < file_origins.len() {
+                            if let Some(ref origin) = file_origins[idx] {
+                                origin.clone()
+                            } else {
+                                file_path.display().to_string()
+                            }
+                        } else {
+                            file_path.display().to_string()
+                        };
+                        
+                        print!("  {} {} - ", "✗".red().bold(), display_path.bright_white());
                         let mut threats = Vec::new();
                         if result.forcedentry { threats.push("FORCEDENTRY"); }
                         if result.blastpass { threats.push("BLASTPASS"); }

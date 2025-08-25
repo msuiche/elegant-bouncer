@@ -81,6 +81,10 @@ impl App {
 }
 
 pub fn run_tui_scan(files: Vec<PathBuf>) -> Result<Vec<crate::ScanResult>, Box<dyn std::error::Error>> {
+    run_tui_scan_with_origins(files, Vec::new())
+}
+
+pub fn run_tui_scan_with_origins(files: Vec<PathBuf>, origins: Vec<Option<String>>) -> Result<Vec<crate::ScanResult>, Box<dyn std::error::Error>> {
     // Setup panic handler to restore terminal
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic| {
@@ -106,6 +110,7 @@ pub fn run_tui_scan(files: Vec<PathBuf>) -> Result<Vec<crate::ScanResult>, Box<d
     let mut scan_results = Vec::new();
 
     // Start scanning in background thread with parallelization
+    let origins_clone = origins.clone();
     let scan_handle = thread::spawn(move || {
         let files = files.clone();
         let results = Arc::new(Mutex::new(Vec::new()));
@@ -120,10 +125,23 @@ pub fn run_tui_scan(files: Vec<PathBuf>) -> Result<Vec<crate::ScanResult>, Box<d
             }
             
             let thread_id = rayon::current_thread_index().unwrap_or(0);
-            let file_name = file_path.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
+            
+            // Use origin if available, otherwise use file name
+            let display_name = if idx < origins_clone.len() {
+                if let Some(ref origin) = origins_clone[idx] {
+                    origin.clone()
+                } else {
+                    file_path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string()
+                }
+            } else {
+                file_path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown")
+                    .to_string()
+            };
             
             // Add this file to active files for this thread
             {
@@ -136,7 +154,7 @@ pub fn run_tui_scan(files: Vec<PathBuf>) -> Result<Vec<crate::ScanResult>, Box<d
                 }
                 
                 // Update this thread's current file
-                state.current_files[thread_id] = format!("[Thread {}] {}", thread_id + 1, file_name);
+                state.current_files[thread_id] = format!("[Thread {}] {}", thread_id + 1, display_name);
                 state.current_status = format!("Processing {} files in parallel [{}/{}]", 
                     state.current_files.iter().filter(|s| !s.is_empty()).count(),
                     files_scanned.load(Ordering::Relaxed),
@@ -144,17 +162,39 @@ pub fn run_tui_scan(files: Vec<PathBuf>) -> Result<Vec<crate::ScanResult>, Box<d
                 );
             }
 
-            // Scan the file
-            let result = crate::scan_single_file(file_path);
+            // Scan the file - pass original name for iOS backups
+            let result = if idx < origins_clone.len() {
+                if let Some(ref origin) = origins_clone[idx] {
+                    // Extract filename from origin path for file type detection
+                    let original_name = std::path::Path::new(origin).file_name()
+                        .and_then(|n| n.to_str());
+                    crate::scan_single_file_with_name(file_path, original_name)
+                } else {
+                    crate::scan_single_file(file_path)
+                }
+            } else {
+                crate::scan_single_file(file_path)
+            };
             
             // Check for threats and update state
             {
                 let app = app_clone.lock().unwrap();
                 let mut state = app.state.lock().unwrap();
                 
+                // Use origin for threat display if available
+                let threat_display_path = if idx < origins_clone.len() {
+                    if let Some(ref origin) = origins_clone[idx] {
+                        origin.clone()
+                    } else {
+                        file_path.display().to_string()
+                    }
+                } else {
+                    file_path.display().to_string()
+                };
+                
                 if result.forcedentry {
                     state.threats.push(ThreatInfo {
-                        file_path: file_path.display().to_string(),
+                        file_path: threat_display_path.clone(),
                         threat_type: "FORCEDENTRY".to_string(),
                         cve_ids: "CVE-2021-30860".to_string(),
                         timestamp: Instant::now(),
@@ -162,7 +202,7 @@ pub fn run_tui_scan(files: Vec<PathBuf>) -> Result<Vec<crate::ScanResult>, Box<d
                 }
                 if result.blastpass {
                     state.threats.push(ThreatInfo {
-                        file_path: file_path.display().to_string(),
+                        file_path: threat_display_path.clone(),
                         threat_type: "BLASTPASS".to_string(),
                         cve_ids: "CVE-2023-4863, CVE-2023-41064".to_string(),
                         timestamp: Instant::now(),
@@ -170,7 +210,7 @@ pub fn run_tui_scan(files: Vec<PathBuf>) -> Result<Vec<crate::ScanResult>, Box<d
                 }
                 if result.triangulation {
                     state.threats.push(ThreatInfo {
-                        file_path: file_path.display().to_string(),
+                        file_path: threat_display_path.clone(),
                         threat_type: "TRIANGULATION".to_string(),
                         cve_ids: "CVE-2023-41990".to_string(),
                         timestamp: Instant::now(),
@@ -178,7 +218,7 @@ pub fn run_tui_scan(files: Vec<PathBuf>) -> Result<Vec<crate::ScanResult>, Box<d
                 }
                 if result.cve_2025_43300 {
                     state.threats.push(ThreatInfo {
-                        file_path: file_path.display().to_string(),
+                        file_path: threat_display_path.clone(),
                         threat_type: "CVE-2025-43300".to_string(),
                         cve_ids: "CVE-2025-43300".to_string(),
                         timestamp: Instant::now(),

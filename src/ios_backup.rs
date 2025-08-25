@@ -28,6 +28,12 @@ pub struct BackupRecord {
     relative_path: String,
 }
 
+pub struct BackupFile {
+    pub source_path: PathBuf,  // The actual file path in backup (XX/XXXX...)
+    pub original_path: String,  // The original iOS path
+    pub domain: String,
+}
+
 pub fn reconstruct_ios_backup(source_dir: &Path, output_dir: &Path, force: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Check if source directory exists
     if !source_dir.exists() || !source_dir.is_dir() {
@@ -199,4 +205,69 @@ pub fn extract_ios_backup(source_dir: &Path, output_dir: Option<&Path>, force: b
     };
 
     reconstruct_ios_backup(source_dir, &output_path, force)
+}
+
+/// Check if a directory is an iOS backup by looking for Manifest.db
+pub fn is_ios_backup(dir: &Path) -> bool {
+    dir.join("Manifest.db").exists()
+}
+
+/// Get scannable files from an iOS backup without extracting
+pub fn get_ios_backup_files(backup_dir: &Path, extensions: &[String]) -> Result<Vec<BackupFile>, Box<dyn std::error::Error>> {
+    let manifest_db = backup_dir.join("Manifest.db");
+    if !manifest_db.exists() {
+        return Err("Manifest.db not found in backup directory".into());
+    }
+
+    let conn = Connection::open(manifest_db)?;
+    
+    // Build extension filter for SQL query
+    let ext_conditions: Vec<String> = extensions.iter()
+        .map(|ext| format!("LOWER(relativePath) LIKE '%.{}'", ext.to_lowercase()))
+        .collect();
+    
+    let where_clause = if ext_conditions.is_empty() {
+        String::new()
+    } else {
+        format!(" AND ({})", ext_conditions.join(" OR "))
+    };
+    
+    let query = format!(
+        "SELECT fileID, domain, relativePath FROM Files 
+         WHERE relativePath IS NOT NULL{}",
+        where_clause
+    );
+    
+    let mut stmt = conn.prepare(&query)?;
+    
+    let records = stmt.query_map([], |row| {
+        Ok(BackupRecord {
+            file_id: row.get(0)?,
+            domain: row.get(1)?,
+            relative_path: row.get(2)?,
+        })
+    })?;
+    
+    let mut backup_files = Vec::new();
+    
+    for record in records {
+        let record = record?;
+        
+        // Construct the actual file path in the backup
+        if record.file_id.len() >= 2 {
+            let subdir = &record.file_id[0..2];
+            let source_file = backup_dir.join(subdir).join(&record.file_id);
+            
+            // Only include files that actually exist
+            if source_file.exists() {
+                backup_files.push(BackupFile {
+                    source_path: source_file,
+                    original_path: format!("{}/{}", record.domain, record.relative_path),
+                    domain: record.domain,
+                });
+            }
+        }
+    }
+    
+    Ok(backup_files)
 }
