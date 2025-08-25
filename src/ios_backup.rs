@@ -18,8 +18,9 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rusqlite::{Connection, Result as RusqliteResult};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 use walkdir::WalkDir;
-use log::{info, warn, error};
+use log::{info, warn, error, debug};
 
 pub struct BackupRecord {
     file_id: String,
@@ -50,24 +51,28 @@ pub fn reconstruct_ios_backup(source_dir: &Path, output_dir: &Path, force: bool)
     // Create output directory
     fs::create_dir_all(output_dir)?;
 
-    println!("{} iOS Backup Reconstruction", "►".cyan().bold());
-    println!("  {} {}", "Source:".bright_blue(), source_dir.display());
-    println!("  {} {}", "Output:".bright_blue(), output_dir.display());
-    println!();
+    // Start timing
+    let start_time = Instant::now();
 
-    // Query the database
-    println!("{} Reading Manifest.db...", "[+]".green());
+    // Query the database first to get total count
+    let pb_query = ProgressBar::new_spinner();
+    pb_query.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg}")
+            .unwrap()
+            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+    );
+    pb_query.set_message("Reading Manifest.db...");
+    
     let records = read_manifest_db(&manifest_db)?;
+    pb_query.finish_and_clear();
     
     if records.is_empty() {
         println!("{} No file records found in database", "[!]".yellow());
         return Ok(());
     }
 
-    println!("{} Found {} file records to process", "[+]".green(), records.len());
-    println!();
-
-    // Create progress bar
+    // Create main progress bar with single-line template
     let pb = ProgressBar::new(records.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -76,14 +81,21 @@ pub fn reconstruct_ios_backup(source_dir: &Path, output_dir: &Path, force: bool)
             .progress_chars("█▓▒░ ")
             .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
     );
+    pb.set_message("Starting extraction...");
 
     let mut copied_count = 0;
     let mut failed_count = 0;
 
     // Process each file record
     for (idx, record) in records.iter().enumerate() {
-        pb.set_position((idx + 1) as u64);
-        pb.set_message(format!("Processing: {}", record.relative_path));
+        // Update progress with current file (truncate long paths)
+        pb.set_position(idx as u64);
+        let display_path = if record.relative_path.len() > 50 {
+            format!("...{}", &record.relative_path[record.relative_path.len().saturating_sub(47)..])
+        } else {
+            record.relative_path.clone()
+        };
+        pb.set_message(display_path);
 
         // Source file path: hash is split as XX/XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
         let source_file = if record.file_id.len() >= 2 {
@@ -96,7 +108,7 @@ pub fn reconstruct_ios_backup(source_dir: &Path, output_dir: &Path, force: bool)
         let dest_file = output_dir.join(&record.domain).join(&record.relative_path);
 
         if !source_file.exists() {
-            warn!("Source file not found: {}", source_file.display());
+            debug!("Source file not found: {}", source_file.display());
             failed_count += 1;
             continue;
         }
@@ -113,7 +125,7 @@ pub fn reconstruct_ios_backup(source_dir: &Path, output_dir: &Path, force: bool)
         // Copy the file
         match fs::copy(&source_file, &dest_file) {
             Ok(_) => {
-                info!("Copied: {} -> {}", source_file.display(), dest_file.display());
+                debug!("Copied: {} -> {}", source_file.display(), dest_file.display());
                 copied_count += 1;
             }
             Err(e) => {
@@ -123,24 +135,28 @@ pub fn reconstruct_ios_backup(source_dir: &Path, output_dir: &Path, force: bool)
         }
     }
 
-    pb.finish_with_message("Reconstruction complete");
-    println!();
+    // Final position update
+    pb.set_position(records.len() as u64);
+    pb.set_message("Extraction complete!");
+    pb.finish_with_message(format!("✓ Extracted {} files in {:.2}s", copied_count, start_time.elapsed().as_secs_f64()));
+    
+    // Calculate performance metrics
+    let elapsed = start_time.elapsed();
+    let files_per_sec = if elapsed.as_secs() > 0 {
+        records.len() as f64 / elapsed.as_secs_f64()
+    } else {
+        records.len() as f64
+    };
 
-    // Display summary
-    println!("╔══════════════════════════════════════════════════════════════════════════╗");
-    println!("║                      {} RECONSTRUCTION SUMMARY {}                         ║", "▓".cyan(), "▓".cyan());
-    println!("╚══════════════════════════════════════════════════════════════════════════╝");
+    // Display compact summary
     println!();
-    println!("  {} {}", "Total Files Processed:".bright_blue(), records.len());
-    println!("  {} {}", "Files Copied Successfully:".green(), copied_count);
-    println!("  {} {}", "Files Failed/Skipped:".red(), failed_count);
-    println!("  {} {}", "Output Location:".bright_blue(), output_dir.display());
-    println!();
+    println!("{} Extraction Summary:", "►".cyan().bold());
+    println!("  {} {} of {} files ({} skipped)", "Files:".bright_blue(), copied_count, records.len(), failed_count);
+    println!("  {} {:.2}s ({:.1} files/sec)", "Time:".bright_blue(), elapsed.as_secs_f64(), files_per_sec);
+    println!("  {} {}", "Output:".bright_blue(), output_dir.display());
 
     if failed_count > 0 {
-        println!("{} {} files could not be copied (this is normal for iOS backups)", 
-            "[!]".yellow(), 
-            failed_count);
+        println!("  {} Some files were skipped (normal for iOS backups)", "[!]".yellow());
     }
 
     Ok(())

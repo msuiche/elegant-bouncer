@@ -715,7 +715,7 @@ impl JBIG2Stream {
 }
 
 pub fn scan_pdf_jbig2_file(path: &path::Path) -> Result<ScanResultStatus> {
-    info!("Opening {}...", path.display());
+    debug!("Opening {}...", path.display());
     let doc = Document::load(path)?;
 
     let mut jbig2_stream = JBIG2Stream::new();

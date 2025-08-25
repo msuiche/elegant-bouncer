@@ -333,7 +333,10 @@ fn main() -> Result<()> {
             LevelFilter::Info
         };
 
-        env_logger::Builder::new().filter_level(level).init();
+        env_logger::Builder::new()
+            .filter_level(level)
+            .filter_module("lopdf", if args.verbose { LevelFilter::Debug } else { LevelFilter::Off })  // Hide lopdf errors unless verbose
+            .init();
     }
 
     if !args.scan && !args.create_forcedentry && !args.ios_extract {
@@ -342,6 +345,12 @@ fn main() -> Result<()> {
     }
 
     let path = Path::new(&args.path);
+
+    // Check if path exists for scan and ios_extract operations
+    if (args.scan || args.ios_extract) && !path.exists() {
+        eprintln!("{} Error: Path does not exist: {}", "✗".red().bold(), path.display());
+        return Ok(());
+    }
 
     // Handle iOS backup extraction
     if args.ios_extract {
@@ -376,49 +385,70 @@ fn main() -> Result<()> {
         let extensions = args.extensions.unwrap_or_else(get_default_extensions);
         let mut all_scan_results = Vec::new();
 
-        // Check for messaging app scan mode
-        if args.messaging {
-            println!();
-            println!("{} iOS Messaging App Attachment Scan", "►".cyan().bold());
-            println!();
-            println!("This mode scans iOS backup directories for messaging app databases");
-            println!("and analyzes all attachments for known mobile exploits.");
-            println!();
+        // Auto-detect iOS backup structure if not explicitly set
+        let mut messaging_mode = args.messaging;
+
+        /*
+        // Disabled for now in case the user wants to scan a single file or do recursive scanning.
+        if !messaging_mode && path.is_dir() {
+            let has_home_domain = path.join("HomeDomain").exists();
+            let has_media_domain = path.join("MediaDomain").exists();
+            // let has_manifest_db = path.join("Manifest.db").exists();
             
-            let messaging_results = messaging::scan_messaging_apps(path);
+            // Check for AppDomainGroup folders (common pattern in iOS backups)
+            let has_app_domain_group = path.read_dir()
+                .map(|entries| {
+                    entries.filter_map(|e| e.ok())
+                        .any(|entry| {
+                            entry.file_name().to_string_lossy().starts_with("AppDomainGroup-")
+                        })
+                })
+                .unwrap_or(false);
             
-            if !messaging_results.is_empty() {
-                println!();
-                println!("{} Found {} infected attachments in messaging apps", 
-                    "⚠".red().bold(), 
-                    messaging_results.len());
-                
-                // Convert messaging results to scan results
-                for msg_result in messaging_results {
-                    // Display infected file with origin first
-                    println!("  {} {} ({})", 
-                        "✗".red().bold(),
-                        msg_result.file_path.display(),
-                        msg_result.origin.yellow()
-                    );
-                    
-                    all_scan_results.push(ScanResult {
-                        file_path: msg_result.file_path,
-                        forcedentry: msg_result.forcedentry,
-                        blastpass: msg_result.blastpass,
-                        triangulation: msg_result.triangulation,
-                        cve_2025_43300: msg_result.cve_2025_43300,
-                    });
+            if (has_home_domain || has_media_domain || has_app_domain_group) {
+                messaging_mode = true;
+                if !args.tui {
+                    println!("{} Detected iOS backup structure, enabling messaging attachment scan", "[+]".green());
                 }
-            } else {
-                println!("{} No infected attachments found in messaging apps", "✓".green().bold());
+            }
+        }
+        */
+
+        // Collect files to scan based on mode
+        let mut files_to_scan: Vec<PathBuf> = Vec::new();
+        let mut file_origins: Vec<Option<String>> = Vec::new();
+        
+        if messaging_mode {
+            // Get messaging attachments
+            if !args.tui {
+                println!();
+                println!("{} iOS Messaging App Attachment Scan", "►".cyan().bold());
+                println!();
+                println!("This mode scans iOS backup directories for messaging app databases");
+                println!("and analyzes all attachments for known mobile exploits.");
+                println!();
+            }
+            
+            let messaging_attachments = messaging::find_messaging_attachments(path);
+            
+            if messaging_attachments.is_empty() {
+                println!("{} No attachments found in messaging apps", "[!]".yellow());
                 return Ok(());
             }
-        // Use TUI mode if requested
-        } else if args.tui {
-            // Collect files to scan
-            let mut files_to_scan = Vec::new();
             
+            // Extract file paths and origins for scanning
+            for attachment in messaging_attachments {
+                files_to_scan.push(attachment.file_path);
+                file_origins.push(Some(attachment.origin));
+            }
+            
+            if !args.tui {
+                println!("{} Found {} attachments in messaging apps to scan", 
+                    "[+]".green(), 
+                    files_to_scan.len());
+            }
+        } else {
+            // Regular file/directory scanning
             if path.is_file() {
                 files_to_scan.push(path.to_path_buf());
             } else if path.is_dir() {
@@ -436,7 +466,10 @@ fn main() -> Result<()> {
                     .map(|e| e.path().to_path_buf())
                     .collect();
             }
+        }
 
+        // Now handle TUI mode or regular scanning
+        if args.tui {
             if files_to_scan.is_empty() {
                 println!("No files found to scan.");
                 return Ok(());
@@ -454,42 +487,25 @@ fn main() -> Result<()> {
                     return Ok(());
                 }
             }
-        } else if path.is_file() {
+        } else if files_to_scan.len() == 1 && !args.messaging {
             // Single file scan
-            println!("[+] Scanning file: {}", path.display());
-            let result = scan_single_file(path);
+            println!("[+] Scanning file: {}", files_to_scan[0].display());
+            let result = scan_single_file(&files_to_scan[0]);
             all_scan_results.push(result);
             
             // Display file info
             println!();
             let _ = print_hashes(&args.path);
-        } else if path.is_dir() {
-            // Directory scan with progress bar
-            println!("{} Scanning directory: {}", "►".cyan().bold(), path.display().to_string().bright_white());
-            if args.recursive {
-                println!("{} Recursive mode: {}", "►".cyan().bold(), "ENABLED".green());
+        } else if !files_to_scan.is_empty() {
+            // Multiple files scan with progress bar
+            if !args.messaging {
+                println!("{} Scanning directory: {}", "►".cyan().bold(), path.display().to_string().bright_white());
+                if args.recursive {
+                    println!("{} Recursive mode: {}", "►".cyan().bold(), "ENABLED".green());
+                }
+                println!("{} Extensions: {}", "►".cyan().bold(), extensions.join(", ").yellow());
             }
-            println!("{} Extensions: {}", "►".cyan().bold(), extensions.join(", ").yellow());
             println!();
-
-            // First, collect all files to scan
-            let walker = if args.recursive {
-                WalkDir::new(path)
-            } else {
-                WalkDir::new(path).max_depth(1)
-            };
-
-            let files_to_scan: Vec<_> = walker
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().is_file())
-                .filter(|e| should_scan_file(e.path(), &extensions))
-                .collect();
-
-            if files_to_scan.is_empty() {
-                println!("{} No files found with specified extensions.", "⚠".yellow());
-                return Ok(());
-            }
 
             // Create progress bar
             let pb = Arc::new(ProgressBar::new(files_to_scan.len() as u64));
@@ -508,22 +524,28 @@ fn main() -> Result<()> {
             // Start timing
             let start_time = Instant::now();
 
-            // Convert files to paths for parallel processing
-            let file_paths: Vec<PathBuf> = files_to_scan.iter()
-                .map(|e| e.path().to_path_buf())
-                .collect();
-
             // Thread-safe counters
             let threat_count = Arc::new(Mutex::new(0));
             let scan_results = Arc::new(Mutex::new(Vec::new()));
 
             // Parallel scanning with rayon
-            file_paths.par_iter().enumerate().for_each(|(idx, file_path)| {
+            files_to_scan.par_iter().enumerate().for_each(|(idx, file_path)| {
                 let file_name = file_path.file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("unknown");
                 
-                pb.set_message(format!("Scanning: {}", file_name));
+                // Include origin in message if available
+                let message = if args.messaging && idx < file_origins.len() {
+                    if let Some(ref origin) = file_origins[idx] {
+                        format!("Scanning: {} ({})", file_name, origin)
+                    } else {
+                        format!("Scanning: {}", file_name)
+                    }
+                } else {
+                    format!("Scanning: {}", file_name)
+                };
+                
+                pb.set_message(message);
                 pb.set_position((idx + 1) as u64);
                 
                 let result = scan_single_file(file_path);
@@ -561,20 +583,20 @@ fn main() -> Result<()> {
             // Calculate performance metrics
             let elapsed = start_time.elapsed();
             let files_per_sec = if elapsed.as_secs() > 0 {
-                file_paths.len() as f64 / elapsed.as_secs_f64()
+                files_to_scan.len() as f64 / elapsed.as_secs_f64()
             } else {
-                file_paths.len() as f64
+                files_to_scan.len() as f64
             };
             
             pb.finish_with_message(format!("Completed - {} threats found", final_threat_count));
             println!();
             println!("{} Scanned {} files in {:.2}s ({:.1} files/sec)", 
                 "✓".green().bold(), 
-                file_paths.len(),
+                files_to_scan.len(),
                 elapsed.as_secs_f64(),
                 files_per_sec);
         } else {
-            eprintln!("Error: Path '{}' does not exist or is not accessible", path.display());
+            println!("{} No files found to scan", "[!]".yellow());
             return Ok(());
         }
 

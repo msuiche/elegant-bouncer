@@ -11,33 +11,22 @@
 //  Matt Suiche (msuiche) 24-Aug-2025
 //
 
-use crate::errors::*;
-use crate::jbig2 as FORCEDENTRY;
-use crate::webp as BLASTPASS;
-use crate::ttf as TRIANGULATION;
-use crate::dng;
-
 use colored::*;
-use lopdf::Document;
-use rusqlite::{Connection, Result as RusqliteResult};
-use std::env;
-use std::fs;
+use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+use log::{info, debug, error};
+
 #[derive(Clone, Debug)]
-pub struct MessagingResult {
+pub struct MessagingAttachment {
     pub file_path: PathBuf,
     pub origin: String,
-    pub forcedentry: bool,
-    pub blastpass: bool,
-    pub triangulation: bool,
-    pub cve_2025_43300: bool,
 }
 
-pub fn scan_messaging_apps(path: &Path) -> Vec<MessagingResult> {
+pub fn find_messaging_attachments(path: &Path) -> Vec<MessagingAttachment> {
     let mut results = Vec::new();
-    println!("{} Starting messaging app scan...", "[+]".green());
+    info!("{} Starting messaging app scan...", "[+]".green());
 
     let walker = WalkDir::new(path).into_iter();
     for entry in walker.filter_map(|e| e.ok()) {
@@ -45,21 +34,21 @@ pub fn scan_messaging_apps(path: &Path) -> Vec<MessagingResult> {
         if let Some(file_name) = entry_path.file_name().and_then(|n| n.to_str()) {
             match file_name {
                 "sms.db" => {
-                    println!("  {} Found iMessage database", "►".cyan());
+                    info!("  {} Found iMessage database", "►".cyan());
                     results.extend(scan_imessage_db(entry_path, path));
                 }
                 "ChatStorage.sqlite" => {
-                    println!("  {} Found WhatsApp database", "►".cyan());
-                    results.extend(scan_whatsapp_db(entry_path));
+                    info!("  {} Found WhatsApp database", "►".cyan());
+                    results.extend(scan_whatsapp_db(entry_path, path));
                 }
                 _ if file_name.ends_with("Viber.sqlite") => {
-                    println!("  {} Found Viber database", "►".cyan());
-                    results.extend(scan_viber_db(entry_path));
+                    info!("  {} Found Viber database", "►".cyan());
+                    results.extend(scan_viber_db(entry_path, path));
                 }
                 "db.sqlite" if entry_path.to_string_lossy().contains("Signal") => {
-                    println!("  {} Found Signal database (encrypted)", "►".cyan());
+                    info!("  {} Found Signal database (encrypted)", "►".cyan());
                     if let Some(parent_dir) = entry_path.parent() {
-                        results.extend(scan_signal_attachments(&parent_dir.join("Attachments")));
+                        results.extend(scan_signal_attachments(parent_dir.join("Attachments"), path));
                     }
                 }
                 _ => {}
@@ -71,22 +60,23 @@ pub fn scan_messaging_apps(path: &Path) -> Vec<MessagingResult> {
     results.extend(scan_telegram_cache(path));
 
     if results.is_empty() {
-        println!("{} No messaging app attachments found", "[!]".yellow());
+        info!("{} No messaging app attachments found", "[!]".yellow());
     } else {
-        println!("{} Found {} messaging app attachments to scan", "[+]".green(), results.len());
+        info!("{} Found {} messaging app attachments to scan", "[+]".green(), results.len());
     }
 
     results
 }
 
-fn scan_imessage_db(db_path: &Path, dump_root: &Path) -> Vec<MessagingResult> {
+fn scan_imessage_db(db_path: &Path, dump_root: &Path) -> Vec<MessagingAttachment> {
     let mut results = Vec::new();
     let home_domain_path = dump_root.join("HomeDomain");
+    let media_domain_path = dump_root.join("MediaDomain");
 
     let conn = match Connection::open(db_path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("    {} Failed to open iMessage database: {}", "✗".red(), e);
+            error!("    {} Failed to open iMessage database: {}", "✗".red(), e);
             return results;
         }
     };
@@ -103,7 +93,7 @@ fn scan_imessage_db(db_path: &Path, dump_root: &Path) -> Vec<MessagingResult> {
     ") {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("    {} Failed to query iMessage database: {}", "✗".red(), e);
+            error!("    {} Failed to query iMessage database: {}", "✗".red(), e);
             return results;
         }
     };
@@ -117,40 +107,64 @@ fn scan_imessage_db(db_path: &Path, dump_root: &Path) -> Vec<MessagingResult> {
     }) {
         Ok(iter) => iter,
         Err(e) => {
-            eprintln!("    {} Failed to iterate iMessage attachments: {}", "✗".red(), e);
+            error!("    {} Failed to iterate iMessage attachments: {}", "✗".red(), e);
             return results;
         }
     };
 
+    let mut attachment_count = 0;
     for row in attachment_iter {
         if let Ok((relative_path_str, sender, message_date)) = row {
+            attachment_count += 1;
+            debug!("      Found attachment entry #{}: {}", attachment_count, relative_path_str);
             if let Some(stripped_path) = relative_path_str.strip_prefix("~/Library/") {
-                let potential_path = home_domain_path.join("Library").join(stripped_path);
+                // SMS attachments are in MediaDomain, not HomeDomain
+                let potential_path = if stripped_path.starts_with("SMS/Attachments") {
+                    media_domain_path.join("Library").join(stripped_path)
+                } else {
+                    home_domain_path.join("Library").join(stripped_path)
+                };
+                debug!("        Looking for: {}", potential_path.display());
                 if potential_path.exists() {
+                    debug!("        ✓ File exists!");
                     let origin = format!(
                         "iMessage from {} on {}",
                         sender.unwrap_or_else(|| "Unknown".to_string()),
                         message_date
                     );
                     
-                    if let Some(scan_result) = scan_attachment(&potential_path, origin) {
-                        results.push(scan_result);
-                    }
+                    results.push(MessagingAttachment {
+                        file_path: potential_path,
+                        origin,
+                    });
+                } else {
+                    debug!("        ✗ File not found");
                 }
+            } else {
+                debug!("        Path doesn't start with ~/Library/: {}", relative_path_str);
             }
         }
     }
+    
+    debug!("      Total attachment entries in database: {}", attachment_count);
 
     results
 }
 
-fn scan_whatsapp_db(db_path: &Path) -> Vec<MessagingResult> {
+fn scan_whatsapp_db(db_path: &Path, _dump_root: &Path) -> Vec<MessagingAttachment> {
     let mut results = Vec::new();
     
-    let app_domain_path = match db_path.ancestors().find(|a| a.to_string_lossy().contains("AppDomainGroup")) {
-        Some(p) => p.to_path_buf(),
+    // Find the AppDomainGroup directory, not the database file itself
+    let app_domain_path = match db_path.parent().and_then(|p| {
+        if p.to_string_lossy().contains("AppDomainGroup") {
+            Some(p.to_path_buf())
+        } else {
+            p.ancestors().find(|a| a.to_string_lossy().contains("AppDomainGroup")).map(|a| a.to_path_buf())
+        }
+    }) {
+        Some(p) => p,
         None => {
-            eprintln!("    {} Could not determine AppDomainGroup path for WhatsApp", "✗".red());
+            error!("    {} Could not determine AppDomainGroup path for WhatsApp", "✗".red());
             return results;
         }
     };
@@ -158,7 +172,7 @@ fn scan_whatsapp_db(db_path: &Path) -> Vec<MessagingResult> {
     let conn = match Connection::open(db_path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("    {} Failed to open WhatsApp database: {}", "✗".red(), e);
+            error!("    {} Failed to open WhatsApp database: {}", "✗".red(), e);
             return results;
         }
     };
@@ -174,7 +188,7 @@ fn scan_whatsapp_db(db_path: &Path) -> Vec<MessagingResult> {
     ") {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("    {} Failed to query WhatsApp database: {}", "✗".red(), e);
+            error!("    {} Failed to query WhatsApp database: {}", "✗".red(), e);
             return results;
         }
     };
@@ -184,23 +198,33 @@ fn scan_whatsapp_db(db_path: &Path) -> Vec<MessagingResult> {
     }) {
         Ok(items) => items,
         Err(e) => {
-            eprintln!("    {} Failed to iterate WhatsApp media: {}", "✗".red(), e);
+            error!("    {} Failed to iterate WhatsApp media: {}", "✗".red(), e);
             return results;
         }
     };
 
     for item_result in media_items {
         if let Ok((relative_path_str, chat_name)) = item_result {
-            let attachment_path = app_domain_path.join(&relative_path_str);
+            // WhatsApp stores paths like "Media/..." but they're actually in "Message/Media/..."
+            let attachment_path = if relative_path_str.starts_with("Media/") {
+                app_domain_path.join("Message").join(&relative_path_str)
+            } else {
+                app_domain_path.join(&relative_path_str)
+            };
+            debug!("      WhatsApp attachment path: {} -> {}", relative_path_str, attachment_path.display());
             if attachment_path.exists() {
+                debug!("        ✓ WhatsApp file exists!");
                 let origin = format!(
                     "WhatsApp in chat '{}'",
                     chat_name.unwrap_or_else(|| "Unknown".to_string())
                 );
                 
-                if let Some(scan_result) = scan_attachment(&attachment_path, origin) {
-                    results.push(scan_result);
-                }
+                results.push(MessagingAttachment {
+                    file_path: attachment_path,
+                    origin,
+                });
+            } else {
+                debug!("        ✗ WhatsApp file not found");
             }
         }
     }
@@ -208,13 +232,20 @@ fn scan_whatsapp_db(db_path: &Path) -> Vec<MessagingResult> {
     results
 }
 
-fn scan_viber_db(db_path: &Path) -> Vec<MessagingResult> {
+fn scan_viber_db(db_path: &Path, _dump_root: &Path) -> Vec<MessagingAttachment> {
     let mut results = Vec::new();
 
-    let app_domain_path = match db_path.ancestors().find(|a| a.to_string_lossy().contains("AppDomain")) {
-        Some(p) => p.to_path_buf(),
+    // Find the AppDomain directory, not including subdirectories
+    let app_domain_path = match db_path.parent().and_then(|p| {
+        if p.to_string_lossy().contains("AppDomain") && !p.to_string_lossy().contains("/Documents") {
+            Some(p.to_path_buf())
+        } else {
+            p.ancestors().find(|a| a.to_string_lossy().contains("AppDomain") && !a.to_string_lossy().contains("/Documents")).map(|a| a.to_path_buf())
+        }
+    }) {
+        Some(p) => p,
         None => {
-            eprintln!("    {} Could not determine AppDomain path for Viber", "✗".red());
+            error!("    {} Could not determine AppDomain path for Viber", "✗".red());
             return results;
         }
     };
@@ -222,7 +253,7 @@ fn scan_viber_db(db_path: &Path) -> Vec<MessagingResult> {
     let conn = match Connection::open(db_path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("    {} Failed to open Viber database: {}", "✗".red(), e);
+            error!("    {} Failed to open Viber database: {}", "✗".red(), e);
             return results;
         }
     };
@@ -237,7 +268,7 @@ fn scan_viber_db(db_path: &Path) -> Vec<MessagingResult> {
     ") {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("    {} Failed to query Viber database: {}", "✗".red(), e);
+            error!("    {} Failed to query Viber database: {}", "✗".red(), e);
             return results;
         }
     };
@@ -247,7 +278,7 @@ fn scan_viber_db(db_path: &Path) -> Vec<MessagingResult> {
     }) {
         Ok(iter) => iter,
         Err(e) => {
-            eprintln!("    {} Failed to iterate Viber attachments: {}", "✗".red(), e);
+            error!("    {} Failed to iterate Viber attachments: {}", "✗".red(), e);
             return results;
         }
     };
@@ -255,15 +286,20 @@ fn scan_viber_db(db_path: &Path) -> Vec<MessagingResult> {
     for row in attachment_iter {
         if let Ok((relative_path_str, partner_name)) = row {
             let attachment_path = app_domain_path.join("Documents").join(&relative_path_str);
+            info!("      Viber attachment path: {} -> {}", relative_path_str, attachment_path.display());
             if attachment_path.exists() {
+                debug!("        ✓ Viber file exists!");
                 let origin = format!(
                     "Viber from/to {}",
                     partner_name.unwrap_or_else(|| "Unknown".to_string())
                 );
                 
-                if let Some(scan_result) = scan_attachment(&attachment_path, origin) {
-                    results.push(scan_result);
-                }
+                results.push(MessagingAttachment {
+                    file_path: attachment_path,
+                    origin,
+                });
+            } else {
+                debug!("        ✗ Viber file not found");
             }
         }
     }
@@ -271,30 +307,31 @@ fn scan_viber_db(db_path: &Path) -> Vec<MessagingResult> {
     results
 }
 
-fn scan_signal_attachments(attachments_path: &Path) -> Vec<MessagingResult> {
+fn scan_signal_attachments(attachments_path: PathBuf, _dump_root: &Path) -> Vec<MessagingAttachment> {
     let mut results = Vec::new();
     
     if !attachments_path.exists() {
-        eprintln!("    {} Signal Attachments directory not found", "⚠".yellow());
+        error!("    {} Signal Attachments directory not found", "⚠".yellow());
         return results;
     }
 
-    println!("    {} Scanning Signal attachments directory", "►".cyan());
-    let walker = WalkDir::new(attachments_path).into_iter();
+    info!("    {} Scanning Signal attachments directory", "►".cyan());
+    let walker = WalkDir::new(&attachments_path).into_iter();
     for entry in walker.filter_map(|e| e.ok()).filter(|e| e.file_type().is_file()) {
         let path = entry.path();
         let origin = "Signal Attachment".to_string();
         
-        if let Some(scan_result) = scan_attachment(path, origin) {
-            results.push(scan_result);
-        }
+        results.push(MessagingAttachment {
+            file_path: path.to_path_buf(),
+            origin,
+        });
     }
 
     results
 }
 
-fn scan_telegram_cache(path: &Path) -> Vec<MessagingResult> {
-    println!("  {} Searching for Telegram cache directories...", "►".cyan());
+fn scan_telegram_cache(path: &Path) -> Vec<MessagingAttachment> {
+    info!("  {} Searching for Telegram cache directories...", "►".cyan());
     let mut results = Vec::new();
     let telegram_dirs = ["Telegram", "Telegram Documents", "Telegram Images", "Telegram Video", "Telegram Audio"];
     
@@ -303,7 +340,7 @@ fn scan_telegram_cache(path: &Path) -> Vec<MessagingResult> {
         if entry.file_type().is_dir() {
             if let Some(dir_name) = entry.path().file_name().and_then(|n| n.to_str()) {
                 if telegram_dirs.contains(&dir_name) {
-                    println!("    {} Found Telegram directory: {}", "►".cyan(), dir_name);
+                    debug!("    {} Found Telegram directory: {}", "►".cyan(), dir_name);
                     for telegram_entry in WalkDir::new(entry.path())
                         .into_iter()
                         .filter_map(|e| e.ok())
@@ -311,9 +348,10 @@ fn scan_telegram_cache(path: &Path) -> Vec<MessagingResult> {
                     {
                         let origin = format!("Telegram Cache - {}", dir_name);
                         
-                        if let Some(scan_result) = scan_attachment(telegram_entry.path(), origin) {
-                            results.push(scan_result);
-                        }
+                        results.push(MessagingAttachment {
+                            file_path: telegram_entry.path().to_path_buf(),
+                            origin,
+                        });
                     }
                 }
             }
@@ -323,105 +361,3 @@ fn scan_telegram_cache(path: &Path) -> Vec<MessagingResult> {
     results
 }
 
-fn scan_attachment(path: &Path, origin: String) -> Option<MessagingResult> {
-    // Only scan relevant file types
-    let ext = path.extension()?.to_str()?;
-    let relevant_extensions = ["pdf", "gif", "webp", "jpg", "jpeg", "png", "tif", "tiff", "dng", "ttf", "otf"];
-    
-    if !relevant_extensions.iter().any(|&e| e.eq_ignore_ascii_case(ext)) {
-        return None;
-    }
-
-    let mut result = MessagingResult {
-        file_path: path.to_path_buf(),
-        origin: origin.clone(),
-        forcedentry: false,
-        blastpass: false,
-        triangulation: false,
-        cve_2025_43300: false,
-    };
-
-    // FORCEDENTRY scan
-    if let Ok(status) = FORCEDENTRY::scan_pdf_jbig2_file(path) {
-        if status == ScanResultStatus::StatusMalicious {
-            result.forcedentry = true;
-        }
-    }
-
-    // BLASTPASS scan
-    if let Ok(status) = BLASTPASS::scan_webp_vp8l_file(path) {
-        if status == ScanResultStatus::StatusMalicious {
-            result.blastpass = true;
-        }
-    }
-
-    // TRIANGULATION scan
-    if let Ok(status) = TRIANGULATION::scan_ttf_file(path) {
-        if status == ScanResultStatus::StatusMalicious {
-            result.triangulation = true;
-        }
-    }
-
-    // CVE-2025-43300 scan
-    if dng::scan_dng_file(path) == ScanResultStatus::StatusMalicious {
-        result.cve_2025_43300 = true;
-    }
-
-    // If the file is a PDF, extract and scan its streams
-    if path.extension().map_or(false, |ext| ext.eq_ignore_ascii_case("pdf")) {
-        let temp_dir = env::temp_dir().join(format!(
-            "elegant-bouncer-scan-{}",
-            path.file_name().unwrap().to_string_lossy()
-        ));
-
-        if fs::create_dir_all(&temp_dir).is_ok() {
-            if let Ok(doc) = Document::load(path) {
-                for (_, object) in &doc.objects {
-                    if let Ok(stream) = object.as_stream() {
-                        let content = &stream.content;
-                        let temp_file_path = temp_dir.join("stream.bin");
-                        
-                        if fs::write(&temp_file_path, content).is_ok() {
-                            // Check embedded WebP
-                            if !result.blastpass {
-                                if let Ok(status) = BLASTPASS::scan_webp_vp8l_file(&temp_file_path) {
-                                    if status == ScanResultStatus::StatusMalicious {
-                                        result.blastpass = true;
-                                    }
-                                }
-                            }
-                            // Check embedded TTF
-                            if !result.triangulation {
-                                if let Ok(status) = TRIANGULATION::scan_ttf_file(&temp_file_path) {
-                                    if status == ScanResultStatus::StatusMalicious {
-                                        result.triangulation = true;
-                                    }
-                                }
-                            }
-                            // Check embedded DNG
-                            if !result.cve_2025_43300 {
-                                if dng::scan_dng_file(&temp_file_path) == ScanResultStatus::StatusMalicious {
-                                    result.cve_2025_43300 = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            // Clean up
-            let _ = fs::remove_dir_all(&temp_dir);
-        }
-    }
-
-    // Only return if a threat was found
-    if result.forcedentry || result.blastpass || result.triangulation || result.cve_2025_43300 {
-        println!("      {} THREAT in {}: {}", 
-            "✗".red().bold(),
-            origin,
-            path.file_name()?.to_str()?
-        );
-        Some(result)
-    } else {
-        None
-    }
-}

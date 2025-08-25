@@ -139,8 +139,8 @@ fn is_adjust_inst_present(byte_data: &Vec<u8>) -> Result<bool> {
         // Undocumented, Apple-only ADJUST TrueType font instruction. This instruction had existed
         // since the early nineties before a patch removed it.
         if opcode == 0x8f || opcode == 0x90 {
-            warn!("0x{:04x}: ADJUST /* Undocumented Apple instruction - TRIANGULATION indicator! */", off);
-            info!("Found ADJUST instruction at offset 0x{:04x} with opcode 0x{:02x}", off, opcode);
+            debug!("0x{:04x}: ADJUST /* Undocumented Apple instruction - TRIANGULATION indicator! */", off);
+            debug!("Found ADJUST instruction at offset 0x{:04x} with opcode 0x{:02x}", off, opcode);
             return Ok(true);
         }
         
@@ -257,7 +257,7 @@ fn is_adjust_inst_present(byte_data: &Vec<u8>) -> Result<bool> {
 }
 
 pub fn scan_ttf_file(path: &path::Path) -> Result<ScanResultStatus> {
-    info!("Opening {}...", path.display());
+    debug!("Opening {}...", path.display());
 
     let mut _status = ScanResultStatus::StatusOk;
 
@@ -346,8 +346,8 @@ pub fn scan_ttf_file(path: &path::Path) -> Result<ScanResultStatus> {
 
                     if let Ok(status) = is_adjust_inst_present(&byte_data) {
                         if status == true {
-                            info!("glyf id = {} and inst len is 0x{:x}", glyf_id, instructions_len);
-                            info!("Found in the glyf {:?} with id {} with base offset {:x} (0x{:x})",
+                            debug!("glyf id = {} and inst len is 0x{:x}", glyf_id, instructions_len);
+                            debug!("Found in the glyf {:?} with id {} with base offset {:x} (0x{:x})",
                                 glyf.tag, glyf_id, glyf.offset, glyf.offset + glyf_offset);
                             return Ok(ScanResultStatus::StatusMalicious);
                         }
@@ -360,7 +360,7 @@ pub fn scan_ttf_file(path: &path::Path) -> Result<ScanResultStatus> {
     }
 
     if !header.is_valid() {
-        warn!("Not a TTF file. Ignore");
+        debug!("Not a TTF file. Ignore");
         return Err(ElegantError::TtfError(TtfError::InvalidFile));
     }
 
