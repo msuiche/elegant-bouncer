@@ -640,7 +640,7 @@ fn main() -> Result<()> {
                 detected: forcedentry_detected,
             },
             Results {
-                name: "BLASTDOOR",
+                name: "BLASTPASS",
                 cve_ids: "CVE-2023-4863, CVE-2023-41064",
                 description: "Malicious WebP presumably shared over iMessage and other mediums",
                 detected: blastpass_detected,

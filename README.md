@@ -9,7 +9,7 @@ It employs an innovative approach for advanced file-based threat identification,
 | Threat Name    | CVEs                            | Supported          |
 |----------------|---------------------------------|--------------------|
 | FORCEDENTRY    | CVE-2021-30860                  | :white_check_mark: |
-| BLASTDOOR      | CVE-2023-4863, CVE-2023-41064   | :white_check_mark: |
+| BLASTPASS      | CVE-2023-4863, CVE-2023-41064   | :white_check_mark: |
 | TRIANGULATION  | CVE-2023-41990                  | :white_check_mark: |
 | CVE-2025-43300 | CVE-2025-43300                  | :white_check_mark: |
 
@@ -141,7 +141,7 @@ When scanning a directory, the tool provides:
 │ name           │ cve_ids                       │ description                                                              │ detected │
 ├────────────────┼───────────────────────────────┼──────────────────────────────────────────────────────────────────────────┼──────────┤
 │ FORCEDENTRY    │ CVE-2021-30860                │ Malicious JBIG2 PDF shared over iMessage                                 │ Yes      │
-│ BLASTDOOR      │ CVE-2023-4863, CVE-2023-41064 │ Malicious WebP presumably shared over iMessage and other mediums         │ Yes      │
+│ BLASTPASS      │ CVE-2023-4863, CVE-2023-41064 │ Malicious WebP presumably shared over iMessage and other mediums         │ Yes      │
 │ TRIANGULATION  │ CVE-2023-41990                │ Maliciously crafted TrueType font embedded in PDFs shared over iMessage  │ No       │
 │ CVE-2025-43300 │ CVE-2025-43300                │ Malicious DNG with JPEG Lossless compression exploiting RawCamera.bundle │ No       │
 ╰────────────────┴───────────────────────────────┴──────────────────────────────────────────────────────────────────────────┴──────────╯

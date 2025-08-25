@@ -5,7 +5,7 @@
 //  webp.rs
 //
 // Abstract:
-//  BLASTDOOR
+//  BLASTPASS
 //
 // Author:
 //  Matt Suiche (msuiche) 22-Sep-2023
