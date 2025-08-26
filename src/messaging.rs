@@ -225,7 +225,7 @@ fn find_ios_backup_databases(backup_path: &Path) -> HashMap<String, PathBuf> {
 
 pub fn find_messaging_attachments(path: &Path) -> Vec<MessagingAttachment> {
     let mut results = Vec::new();
-    info!("{} Starting messaging app scan...", "[+]".green());
+    info!("{} Starting messaging app and document scan...", "[+]".green());
 
     // Check if this is an iOS backup first
     let is_ios_backup = path.join("Manifest.db").exists();
@@ -263,6 +263,9 @@ pub fn find_messaging_attachments(path: &Path) -> Vec<MessagingAttachment> {
                 _ => {}
             }
         }
+        
+        // Scan iCloud Drive documents
+        results.extend(scan_icloud_drive(path, cache.as_ref()));
     } else {
         // Handle regular directory structure (extracted backup or direct scan)
         let walker = WalkDir::new(path).into_iter();
@@ -295,12 +298,15 @@ pub fn find_messaging_attachments(path: &Path) -> Vec<MessagingAttachment> {
         
         // Scan Telegram cache directories
         results.extend(scan_telegram_cache(path));
+        
+        // Scan iCloud Drive documents (for reconstructed backups)
+        results.extend(scan_icloud_drive(path, None));
     }
 
     if results.is_empty() {
-        info!("{} No messaging app attachments found", "[!]".yellow());
+        info!("{} No messaging app attachments or documents found", "[!]".yellow());
     } else {
-        info!("{} Found {} messaging app attachments to scan", "[+]".green(), results.len());
+        info!("{} Found {} files to scan", "[+]".green(), results.len());
     }
 
     results
@@ -899,6 +905,162 @@ fn scan_signal_attachments(attachments_path: PathBuf, _dump_root: &Path) -> Vec<
         });
     }
 
+    results
+}
+
+fn scan_icloud_drive(path: &Path, cache: Option<&Arc<IOSBackupCache>>) -> Vec<MessagingAttachment> {
+    let mut results = Vec::new();
+    info!("  {} Scanning iCloud Drive documents...", "►".cyan());
+    
+    let is_ios_backup = path.join("Manifest.db").exists();
+    
+    if is_ios_backup {
+        // For iOS backup, use cache to find iCloud Drive files
+        if let Some(cache) = cache {
+            let mut found_count = 0;
+            let mut total_count = 0;
+            
+            // Look for files in the iCloud Drive path pattern
+            for (relative_path, actual_path) in &cache.file_map {
+                // Check if this is an iCloud Drive file
+                if relative_path.contains("com~apple~CloudDocs") || 
+                   relative_path.contains("Mobile Documents/com~apple~CloudDocs") {
+                    total_count += 1;
+                    
+                    // Check if file has a scannable extension
+                    if let Some(filename) = Path::new(relative_path).file_name().and_then(|n| n.to_str()) {
+                        // Get extension
+                        let should_scan = Path::new(filename).extension()
+                            .and_then(|ext| ext.to_str())
+                            .map(|ext| {
+                                let ext_lower = ext.to_lowercase();
+                                // Check for common document/image types
+                                matches!(ext_lower.as_str(), 
+                                    "pdf" | "doc" | "docx" | "xls" | "xlsx" | 
+                                    "jpg" | "jpeg" | "png" | "gif" | "webp" | 
+                                    "tif" | "tiff" | "dng" | "heic" | "heif" |
+                                    "ttf" | "otf" | "zip" | "rar" | "7z")
+                            })
+                            .unwrap_or(false);
+                        
+                        if should_scan && actual_path.exists() {
+                            found_count += 1;
+                            let origin = format!("iCloud Drive: {}", relative_path);
+                            let original_name = filename.to_string();
+                            
+                            debug!("    Adding iCloud file #{}: {:?} ({})", found_count, actual_path, filename);
+                            
+                            results.push(MessagingAttachment {
+                                file_path: actual_path.clone(),
+                                origin,
+                                original_name,
+                            });
+                        }
+                    }
+                }
+            }
+            
+            if found_count > 0 {
+                info!("    Found {}/{} iCloud Drive files", found_count, total_count);
+            }
+        }
+    } else {
+        // For reconstructed backup, look for the iCloud Drive folder
+        let icloud_paths = vec![
+            path.join("HomeDomain/Library/Mobile Documents/com~apple~CloudDocs"),
+            path.join("Library/Mobile Documents/com~apple~CloudDocs"),
+            path.join("Mobile Documents/com~apple~CloudDocs"),
+            path.join("com~apple~CloudDocs"),
+        ];
+        
+        debug!("    Looking for iCloud Drive in reconstructed backup...");
+        for icloud_path in &icloud_paths {
+            debug!("    Checking path: {:?} (exists: {})", icloud_path, icloud_path.exists());
+            if icloud_path.exists() && icloud_path.is_dir() {
+                info!("    Found iCloud Drive at: {:?}", icloud_path);
+                
+                // Recursively scan the iCloud Drive folder with no depth limit
+                let walker = WalkDir::new(&icloud_path)
+                    .follow_links(false)  // Don't follow symlinks to avoid loops
+                    .min_depth(0)         // Include the root directory
+                    .max_open(50);        // Limit open file descriptors
+                
+                let mut found_count = 0;
+                let mut total_files = 0;
+                let mut skipped_files = 0;
+                
+                for entry in walker.into_iter() {
+                    match entry {
+                        Ok(entry) => {
+                            if entry.file_type().is_file() {
+                                total_files += 1;
+                                let file_path = entry.path();
+                                
+                                // Debug log every 100th file to show progress
+                                if total_files % 100 == 0 {
+                                    debug!("      Processed {} files so far...", total_files);
+                                }
+                                
+                                // Check if file has a scannable extension
+                                let should_scan = file_path.extension()
+                                    .and_then(|ext| ext.to_str())
+                                    .map(|ext| {
+                                        let ext_lower = ext.to_lowercase();
+                                        matches!(ext_lower.as_str(),
+                                            "pdf" | "doc" | "docx" | "xls" | "xlsx" |
+                                            "jpg" | "jpeg" | "png" | "gif" | "webp" |
+                                            "tif" | "tiff" | "dng" | "heic" | "heif" |
+                                            "ttf" | "otf" | "zip" | "rar" | "7z")
+                                    })
+                                    .unwrap_or(false);
+                                
+                                if should_scan {
+                                    found_count += 1;
+                                    let relative_path = file_path.strip_prefix(&icloud_path)
+                                        .unwrap_or(file_path)
+                                        .to_string_lossy();
+                                    
+                                    let origin = format!("iCloud Drive: {}", relative_path);
+                                    let original_name = file_path.file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("unknown")
+                                        .to_string();
+                                    
+                                    debug!("      Adding file #{}: {}", found_count, original_name);
+                                    
+                                    results.push(MessagingAttachment {
+                                        file_path: file_path.to_path_buf(),
+                                        origin,
+                                        original_name,
+                                    });
+                                } else {
+                                    skipped_files += 1;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            debug!("      Error accessing entry: {}", e);
+                        }
+                    }
+                }
+                
+                info!("    Scanned {} total files, found {} scannable files (skipped {} non-matching extensions)", 
+                    total_files, found_count, skipped_files);
+                
+                if found_count > 0 {
+                    info!("    Found {} iCloud Drive files", found_count);
+                } else if total_files > 0 {
+                    info!("    Found {} files in iCloud Drive but none with scannable extensions", total_files);
+                }
+                break; // Found the iCloud folder, no need to check other paths
+            }
+        }
+        
+        if !icloud_paths.iter().any(|p| p.exists()) {
+            debug!("    No iCloud Drive folder found in reconstructed backup");
+        }
+    }
+    
     results
 }
 
