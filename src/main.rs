@@ -26,6 +26,8 @@ mod messaging;
 mod ios_backup;
 
 use std::path::{Path, PathBuf};
+use std::fs;
+use std::io::Write;
 use colored::*;
 use walkdir::WalkDir;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -91,7 +93,7 @@ struct Args {
     #[clap(long)]
     ios_extract: bool,
 
-    /// Output directory for iOS backup extraction
+    /// Output directory for iOS backup extraction or suspicious files collection
     #[clap(short = 'o', long)]
     output: Option<String>,
 
@@ -175,6 +177,118 @@ pub struct ScanResult {
     pub blastpass: bool,
     pub triangulation: bool,
     pub cve_2025_43300: bool,
+}
+
+#[derive(Clone)]
+struct SuspiciousFile {
+    source_path: PathBuf,
+    original_path: Option<String>,  // For iOS backups, the original iOS path
+    threats: Vec<String>,
+}
+
+fn collect_suspicious_files(
+    suspicious_files: &[SuspiciousFile],
+    output_dir: &Path,
+    force: bool,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    // Check if output directory exists and handle force flag
+    if output_dir.exists() {
+        if !force {
+            return Err(format!(
+                "Output directory '{}' already exists. Use --force to overwrite.",
+                output_dir.display()
+            ).into());
+        }
+        // Remove existing directory if force is true
+        fs::remove_dir_all(output_dir)?;
+    }
+    
+    // Create output directory
+    fs::create_dir_all(output_dir)?;
+    
+    // Create subdirectories for each threat type
+    let threat_dirs = vec!["FORCEDENTRY", "BLASTPASS", "TRIANGULATION", "CVE-2025-43300", "MULTIPLE_THREATS"];
+    for dir in &threat_dirs {
+        fs::create_dir_all(output_dir.join(dir))?;
+    }
+    
+    // Create log file
+    let log_path = output_dir.join("suspicious_files.log");
+    let mut log_file = fs::File::create(&log_path)?;
+    
+    // Write header to log file
+    writeln!(log_file, "ELEGANTBOUNCER Suspicious Files Report")?;
+    writeln!(log_file, "Generated: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"))?;
+    writeln!(log_file, "Total suspicious files: {}", suspicious_files.len())?;
+    writeln!(log_file, "{}", "=".repeat(80))?;
+    writeln!(log_file)?;
+    
+    // Copy files and log them
+    for (idx, suspicious_file) in suspicious_files.iter().enumerate() {
+        let file_num = idx + 1;
+        
+        // Determine target directory based on threats
+        let target_dir = if suspicious_file.threats.len() > 1 {
+            output_dir.join("MULTIPLE_THREATS")
+        } else if let Some(threat) = suspicious_file.threats.first() {
+            output_dir.join(threat)
+        } else {
+            continue; // Skip if no threats (shouldn't happen)
+        };
+        
+        // Generate unique filename for the copy
+        let original_name = suspicious_file.source_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+        
+        let target_filename = format!("{:04}_{}", file_num, original_name);
+        let target_path = target_dir.join(&target_filename);
+        
+        // Copy the file
+        match fs::copy(&suspicious_file.source_path, &target_path) {
+            Ok(_) => {
+                // Log successful copy
+                writeln!(log_file, "File #{}", file_num)?;
+                writeln!(log_file, "  Threats: {}", suspicious_file.threats.join(", "))?;
+                writeln!(log_file, "  Source: {}", suspicious_file.source_path.display())?;
+                if let Some(ref original) = suspicious_file.original_path {
+                    writeln!(log_file, "  Original iOS Path: {}", original)?;
+                }
+                writeln!(log_file, "  Copied to: {}", target_path.display())?;
+                writeln!(log_file)?;
+            }
+            Err(e) => {
+                // Log failed copy
+                writeln!(log_file, "File #{} - COPY FAILED", file_num)?;
+                writeln!(log_file, "  Error: {}", e)?;
+                writeln!(log_file, "  Source: {}", suspicious_file.source_path.display())?;
+                writeln!(log_file)?;
+                eprintln!("Failed to copy {}: {}", suspicious_file.source_path.display(), e);
+            }
+        }
+    }
+    
+    // Write summary
+    writeln!(log_file, "{}", "=".repeat(80))?;
+    writeln!(log_file, "Summary:")?;
+    
+    let mut threat_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for file in suspicious_files {
+        for threat in &file.threats {
+            *threat_counts.entry(threat.clone()).or_insert(0) += 1;
+        }
+    }
+    
+    for (threat, count) in threat_counts {
+        writeln!(log_file, "  {}: {} files", threat, count)?;
+    }
+    
+    println!();
+    println!("{} Suspicious files collected in: {}", "✓".green().bold(), output_dir.display());
+    println!("{} Log file created: {}", "✓".green().bold(), log_path.display());
+    
+    Ok(())
 }
 
 fn get_file_type(path: &Path) -> Option<String> {
@@ -642,23 +756,45 @@ fn main() -> Result<()> {
         let mut triangulation_detected = false;
         let mut cve_2025_43300_detected = false;
         let mut infected_files = Vec::new();
+        let mut suspicious_files: Vec<SuspiciousFile> = Vec::new();
 
-        for result in &all_scan_results {
+        for (idx, result) in all_scan_results.iter().enumerate() {
+            let mut threats = Vec::new();
+            
             if result.forcedentry {
                 forcedentry_detected = true;
                 infected_files.push(result.file_path.clone());
+                threats.push("FORCEDENTRY".to_string());
             }
             if result.blastpass {
                 blastpass_detected = true;
                 infected_files.push(result.file_path.clone());
+                threats.push("BLASTPASS".to_string());
             }
             if result.triangulation {
                 triangulation_detected = true;
                 infected_files.push(result.file_path.clone());
+                threats.push("TRIANGULATION".to_string());
             }
             if result.cve_2025_43300 {
                 cve_2025_43300_detected = true;
                 infected_files.push(result.file_path.clone());
+                threats.push("CVE-2025-43300".to_string());
+            }
+            
+            // If any threats found, add to suspicious files
+            if !threats.is_empty() {
+                let original_path = if idx < file_origins.len() {
+                    file_origins[idx].clone()
+                } else {
+                    None
+                };
+                
+                suspicious_files.push(SuspiciousFile {
+                    source_path: result.file_path.clone(),
+                    original_path,
+                    threats,
+                });
             }
         }
 
@@ -756,6 +892,19 @@ fn main() -> Result<()> {
                 println!();
                 let infected_table = Table::new(infected_details).with(Style::rounded()).to_string();
                 println!("{}", infected_table);
+            }
+        }
+        
+        // If output directory is specified and we found suspicious files, collect them
+        if args.scan && !suspicious_files.is_empty() {
+            if let Some(ref output_dir) = args.output {
+                println!();
+                println!("{} Collecting suspicious files...", "►".cyan().bold());
+                
+                let output_path = Path::new(output_dir);
+                if let Err(e) = collect_suspicious_files(&suspicious_files, output_path, args.force) {
+                    eprintln!("{} Failed to collect suspicious files: {}", "✗".red().bold(), e);
+                }
             }
         }
     }
