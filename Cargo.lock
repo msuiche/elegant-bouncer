@@ -425,6 +425,7 @@ dependencies = [
  "env_logger",
  "hex",
  "indicatif",
+ "lazy_static",
  "log",
  "lopdf",
  "md5",
@@ -433,6 +434,7 @@ dependencies = [
  "rayon",
  "rusqlite",
  "sha1 0.10.6",
+ "sha2",
  "sha3",
  "tabled",
  "thiserror",
@@ -1196,6 +1198,17 @@ name = "sha1_smol"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae1a47186c03a32177042e55dbc5fd5aee900b8e0069a8d70fba96a9375cd012"
+
+[[package]]
+name = "sha2"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
+]
 
 [[package]]
 name = "sha3"

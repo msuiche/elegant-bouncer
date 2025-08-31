@@ -6,3 +6,4 @@ pub mod errors;
 pub mod huffman;
 pub mod messaging;
 pub mod ios_backup;
+pub mod whitelist;

@@ -10,7 +10,7 @@
 // Author:
 //  Matt Suiche (msuiche) 28-Dec-2023
 //
-use log::{info, debug, warn, error};
+use log::{info, debug, warn};
 use std::path;
 
 use crate::errors::*;

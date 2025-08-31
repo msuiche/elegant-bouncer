@@ -24,6 +24,7 @@ mod huffman;
 mod tui;
 mod messaging;
 mod ios_backup;
+mod whitelist;
 
 use std::path::{Path, PathBuf};
 use std::fs;
@@ -36,7 +37,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use env_logger;
-use log::LevelFilter;
+use log::{LevelFilter, debug};
 use clap::Parser;
 
 use crate::jbig2 as FORCEDENTRY;
@@ -105,6 +106,10 @@ struct Args {
     /// Default: pdf,gif,webp,jpg,jpeg,png,tif,tiff,dng,ttf,otf
     #[clap(short, long, value_delimiter = ',')]
     extensions: Option<Vec<String>>,
+
+    /// Bypass whitelist checking for known safe files
+    #[clap(long)]
+    bypass_whitelist: bool,
 
     /// Path to the input file or folder.
     #[clap(value_name = "Input path")]
@@ -326,6 +331,10 @@ pub fn scan_single_file(path: &Path) -> ScanResult {
 }
 
 pub fn scan_single_file_with_name(path: &Path, original_name: Option<&str>) -> ScanResult {
+    scan_single_file_with_name_and_options(path, original_name, false)
+}
+
+pub fn scan_single_file_with_name_and_options(path: &Path, original_name: Option<&str>, bypass_whitelist: bool) -> ScanResult {
     let mut result = ScanResult {
         file_path: path.to_path_buf(),
         forcedentry: false,
@@ -333,6 +342,23 @@ pub fn scan_single_file_with_name(path: &Path, original_name: Option<&str>) -> S
         triangulation: false,
         cve_2025_43300: false,
     };
+
+    // Check whitelist unless bypass is enabled
+    if !bypass_whitelist {
+        if let Some(path_str) = path.to_str() {
+            match whitelist::compute_file_sha256(path_str) {
+                Ok(hash) => {
+                    if whitelist::is_whitelisted(&hash) {
+                        debug!("File {} is whitelisted (SHA256: {}), skipping scan", path.display(), hash);
+                        return result;
+                    }
+                }
+                Err(e) => {
+                    debug!("Failed to compute SHA256 for whitelist check: {}", e);
+                }
+            }
+        }
+    }
 
     // debug!("Scanning file: {:?}", path);
     // debug!("Original name: {:?}", original_name);
@@ -612,7 +638,11 @@ fn main() -> Result<()> {
         } else if files_to_scan.len() == 1 && !args.messaging {
             // Single file scan
             println!("[+] Scanning file: {}", files_to_scan[0].display());
-            let result = scan_single_file(&files_to_scan[0]);
+            let result = if args.bypass_whitelist {
+                scan_single_file_with_name_and_options(&files_to_scan[0], None, true)
+            } else {
+                scan_single_file(&files_to_scan[0])
+            };
             all_scan_results.push(result);
             
             // Display file info
@@ -681,12 +711,20 @@ fn main() -> Result<()> {
                         // Extract just the filename from the full iOS path
                         let original_name = Path::new(origin).file_name()
                             .and_then(|n| n.to_str());
-                        scan_single_file_with_name(file_path, original_name)
+                        scan_single_file_with_name_and_options(file_path, original_name, args.bypass_whitelist)
+                    } else {
+                        if args.bypass_whitelist {
+                            scan_single_file_with_name_and_options(file_path, None, true)
+                        } else {
+                            scan_single_file(file_path)
+                        }
+                    }
+                } else {
+                    if args.bypass_whitelist {
+                        scan_single_file_with_name_and_options(file_path, None, true)
                     } else {
                         scan_single_file(file_path)
                     }
-                } else {
-                    scan_single_file(file_path)
                 };
                 
                 // Report if any threats found
