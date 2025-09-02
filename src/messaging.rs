@@ -63,7 +63,8 @@ impl IOSBackupCache {
                 let mut count = 0;
                 for result in results {
                     if let Ok((file_id, domain, relative_path)) = result {
-                        if file_id.len() >= 2 {
+                        if file_id.len() >= 2 && file_id.is_ascii() {
+                            // Safe to slice since we verified it's ASCII
                             let subdir = &file_id[0..2];
                             let actual_path = backup_path.join(subdir).join(&file_id);
                             
@@ -197,7 +198,8 @@ fn find_ios_backup_databases(backup_path: &Path) -> HashMap<String, PathBuf> {
                         }) {
                             if let Some(Ok(file_id)) = results.next() {
                                 // Construct the actual file path in the backup
-                                if file_id.len() >= 2 {
+                                if file_id.len() >= 2 && file_id.is_ascii() {
+                                    // Safe to slice since we verified it's ASCII
                                     let subdir = &file_id[0..2];
                                     let db_file = backup_path.join(subdir).join(&file_id);
                                     if db_file.exists() {
@@ -362,7 +364,8 @@ fn resolve_ios_backup_file(backup_path: &Path, ios_relative_path: &str) -> Optio
                 }) {
                     if let Some(Ok((file_id, domain))) = results.next() {
                         // Construct the actual file path in the backup
-                        if file_id.len() >= 2 {
+                        if file_id.len() >= 2 && file_id.is_ascii() {
+                            // Safe to slice since we verified it's ASCII
                             let subdir = &file_id[0..2];
                             let file_path = backup_path.join(subdir).join(&file_id);
                             if file_path.exists() {
@@ -384,7 +387,8 @@ fn resolve_ios_backup_file(backup_path: &Path, ios_relative_path: &str) -> Optio
                 }) {
                     for result in results {
                         if let Ok((file_id, rel_path)) = result {
-                            if file_id.len() >= 2 {
+                            if file_id.len() >= 2 && file_id.is_ascii() {
+                                // Safe to slice since we verified it's ASCII
                                 let subdir = &file_id[0..2];
                                 let file_path = backup_path.join(subdir).join(&file_id);
                                 if file_path.exists() {

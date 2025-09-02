@@ -96,15 +96,19 @@ pub fn reconstruct_ios_backup(source_dir: &Path, output_dir: &Path, force: bool)
     for (idx, record) in records.iter().enumerate() {
         // Update progress with current file (truncate long paths)
         pb.set_position(idx as u64);
-        let display_path = if record.relative_path.len() > 50 {
-            format!("...{}", &record.relative_path[record.relative_path.len().saturating_sub(47)..])
+        let display_path = if record.relative_path.chars().count() > 50 {
+            // Use Unicode-aware truncation to avoid panic on multi-byte characters
+            let chars: Vec<char> = record.relative_path.chars().collect();
+            let start_idx = chars.len().saturating_sub(47);
+            format!("...{}", chars[start_idx..].iter().collect::<String>())
         } else {
             record.relative_path.clone()
         };
         pb.set_message(display_path);
 
         // Source file path: hash is split as XX/XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        let source_file = if record.file_id.len() >= 2 {
+        let source_file = if record.file_id.len() >= 2 && record.file_id.is_ascii() {
+            // Safe to slice since we verified it's ASCII
             source_dir.join(&record.file_id[..2]).join(&record.file_id)
         } else {
             source_dir.join(&record.file_id)
@@ -254,7 +258,8 @@ pub fn get_ios_backup_files(backup_dir: &Path, extensions: &[String]) -> Result<
         let record = record?;
         
         // Construct the actual file path in the backup
-        if record.file_id.len() >= 2 {
+        if record.file_id.len() >= 2 && record.file_id.is_ascii() {
+            // Safe to slice since we verified it's ASCII
             let subdir = &record.file_id[0..2];
             let source_file = backup_dir.join(subdir).join(&record.file_id);
             
