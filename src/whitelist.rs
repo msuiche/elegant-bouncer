@@ -6,7 +6,7 @@ use std::collections::HashSet;
 lazy_static::lazy_static! {
     static ref FILE_WHITELIST: HashSet<String> = {
         let mut set = HashSet::new();
-        // TTF font files
+        // TTF font files - System fonts
         set.insert("f30e7620766b57a7dc73a43fa415b0ecd81a655684c41255abe5910fc7cd1fdd".to_string());
         set.insert("4f54eb299fccea7f103edeb0d92437359bfd4441811d53222b82b335369f6218".to_string());
         set.insert("ae3d2b9af860ca91a2bbd288dc00172a6cc06a05998c5b1bddd17d22c253bfad".to_string());
@@ -18,6 +18,17 @@ lazy_static::lazy_static! {
         set.insert("519a78f73cd5ac6286d3b2d820e4ec68dca2169c6930870ab9e5cee1fd4c1804".to_string());
         set.insert("aa7570d12d0bd44ef0d736683b600efa0c6eb28ab118a9261009cce1aa06aa1a".to_string());
         set.insert("1c81ead87ca36eee7d51dbe816c3202ba8052fc88228a46de930339c4ec1df22".to_string());
+        // Additional font files
+        set.insert("9e94d4dbe2e87ea495f0d42d879146bc74c4c4e910776a49154a15eefa37ef59".to_string());
+        set.insert("94dab9f1d5b13ea0769d124a2da0d02433f3b99d6dea5a07c0446a77158100c0".to_string());
+        set.insert("3d06af1f31cd83ace7a265a014b8fb5dee15770ecac8f7a55555190e627e03c2".to_string());
+        set.insert("8d2fa0610276fa5ebaa6d583c2055826b0184544a203e9655c3bb3e3a368b2b7".to_string());
+        set.insert("99bcc7011cb38a587e2b6544963574085f57acf467f0eb6f8910ac5b9c09e99f".to_string());
+        set.insert("aa58f33f239a0fb02f5c7a6c45c043d7a9ac9a093335806694ecd6d4edc0d6a8".to_string());
+        set.insert("9c7fb9071a6c28582c6b84468cbff2c7a71e02b17e3a3b4548a159938d22916b".to_string());
+        set.insert("31f099c13f6e4ba05f1b471bf170cb5493249474222917372de3ca5cf29e6a1a".to_string());
+        set.insert("bc844b5b02d3f3adabb514de4e0c0208252d3123413bd03f6287fa446acee859".to_string());
+        set.insert("ef149f08bdd2ff09a4e2c8573476b7b0f3fbb15b623954ade59899e7175bedda".to_string());
         set
     };
 }
