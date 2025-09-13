@@ -25,6 +25,12 @@ const TAG_SAMPLES_PER_PIXEL: u16 = 0x0115;
 const TAG_COMPRESSION: u16 = 0x0103;
 const TAG_STRIP_OFFSETS: u16 = 0x0111;
 const TAG_JPEG_INTERCHANGE_FORMAT: u16 = 0x0201;
+const TAG_IMAGE_WIDTH: u16 = 0x0100;
+const TAG_IMAGE_HEIGHT: u16 = 0x0101;
+const TAG_TILE_WIDTH: u16 = 0x0142;
+const TAG_TILE_HEIGHT: u16 = 0x0143;
+const TAG_TILE_OFFSETS: u16 = 0x0144;
+const TAG_TILE_BYTE_COUNTS: u16 = 0x0145;
 
 const JPEG_LOSSLESS_COMPRESSION: u16 = 7;
 const SOF3_MARKER: u16 = 0xFFC3;
@@ -40,6 +46,17 @@ struct IFDEntry {
 struct TIFFReader {
     file: File,
     is_little_endian: bool,
+}
+
+#[derive(Debug, Default)]
+struct TileInfo {
+    width: Option<u32>,
+    height: Option<u32>,
+    tile_width: Option<u32>,
+    tile_height: Option<u32>,
+    tile_offsets: Vec<u32>,
+    tile_byte_counts: Vec<u32>,
+    is_compressed: bool,
 }
 
 impl TIFFReader {
@@ -147,6 +164,19 @@ impl TIFFReader {
         }
     }
 
+    fn get_value_array_u32(&mut self, entry: &IFDEntry) -> std::io::Result<Vec<u32>> {
+        let saved_pos = self.file.stream_position()?;
+        self.seek(entry.value_offset as u64)?;
+        
+        let mut values = Vec::with_capacity(entry.count as usize);
+        for _ in 0..entry.count {
+            values.push(self.read_u32()?);
+        }
+        
+        self.seek(saved_pos)?;
+        Ok(values)
+    }
+
     fn check_samples_per_pixel(&mut self, entry: &IFDEntry) -> std::io::Result<(bool, u32)> {
         // For short values (type 3) with count 1, the value is stored in the value_offset field
         let samples = if entry.field_type == 3 && entry.count == 1 {
@@ -161,6 +191,59 @@ impl TIFFReader {
         
         let is_suspicious = samples == 2;
         Ok((is_suspicious, entry.value_offset))
+    }
+
+    fn validate_tile_info(&self, tile_info: &TileInfo) -> bool {
+        if let (Some(width), Some(height), Some(tile_width), Some(tile_height)) = 
+            (tile_info.width, tile_info.height, tile_info.tile_width, tile_info.tile_height) {
+            
+            // Check for invalid dimensions
+            if width == 0 || height == 0 || tile_width == 0 || tile_height == 0 {
+                warn!("[!] Invalid tile dimensions detected");
+                return false;
+            }
+            
+            // Calculate expected number of tiles (matching cdng_lossless_jpeg_unpack logic)
+            // https://github.com/qriousec/rawcamera_dng/blob/main/io/image/codecs/cdng_decoder.c#L109
+            let tiles_horizontal = (width + tile_width - 1) / tile_width;
+            let mut tiles_vertical = (height + tile_height - 1) / tile_height;
+            
+            if tile_info.is_compressed {
+                tiles_vertical >>= 1; // Divide by 2 for compressed tiles
+            }
+            
+            let expected_tiles = tiles_horizontal * tiles_vertical;
+            let actual_tile_count = tile_info.tile_offsets.len() as u32;
+            
+            // Check if tile counts match
+            if tile_info.tile_offsets.len() != tile_info.tile_byte_counts.len() {
+                warn!("[!] Mismatch between tile_offsets count ({}) and tile_byte_counts count ({})",
+                      tile_info.tile_offsets.len(), tile_info.tile_byte_counts.len());
+                return false;
+            }
+            
+            // Check if actual tile count matches expected
+            if actual_tile_count != expected_tiles {
+                warn!("[!] Tile count mismatch: expected {} tiles ({}x{} grid), but found {}",
+                      expected_tiles, tiles_horizontal, tiles_vertical, actual_tile_count);
+                return false;
+            }
+            
+            // Check for overflow conditions similar to cdng_lossless_jpeg_unpack
+            const LIMIT: u32 = 0xFFFE7960;
+            if width > LIMIT || height > LIMIT || tile_width > LIMIT || tile_height > LIMIT {
+                warn!("[!] Dimension overflow detected");
+                return false;
+            }
+            
+            // Check for suspicious tile count (matching cdng_lossless_jpeg_unpack check)
+            if ((actual_tile_count >> 5) & 0x1FFFFFF) >= 0x271 {
+                warn!("[!] Suspicious tile count detected: {}", actual_tile_count);
+                return false;
+            }
+        }
+        
+        true
     }
 
     fn check_jpeg_lossless(&mut self, offset: u32) -> std::io::Result<bool> {
@@ -231,6 +314,7 @@ pub fn scan_dng_file(file_path: &Path) -> ScanResultStatus {
     let mut has_jpeg_lossless = false;
     let mut jpeg_offset = 0u32;
     let mut subifd_offsets = Vec::new();
+    let mut tile_info = TileInfo::default();
     
     while ifd_offset != 0 {
         let (entries, next_ifd) = match reader.read_ifd(ifd_offset) {
@@ -252,7 +336,38 @@ pub fn scan_dng_file(file_path: &Path) -> ScanResultStatus {
                     if let Ok(compression) = reader.get_value_u16(entry) {
                         if compression == JPEG_LOSSLESS_COMPRESSION {
                             has_jpeg_lossless = true;
+                            tile_info.is_compressed = true;
                         }
+                    }
+                }
+                TAG_IMAGE_WIDTH => {
+                    if let Ok(width) = reader.get_value_u32(entry) {
+                        tile_info.width = Some(width);
+                    }
+                }
+                TAG_IMAGE_HEIGHT => {
+                    if let Ok(height) = reader.get_value_u32(entry) {
+                        tile_info.height = Some(height);
+                    }
+                }
+                TAG_TILE_WIDTH => {
+                    if let Ok(width) = reader.get_value_u32(entry) {
+                        tile_info.tile_width = Some(width);
+                    }
+                }
+                TAG_TILE_HEIGHT => {
+                    if let Ok(height) = reader.get_value_u32(entry) {
+                        tile_info.tile_height = Some(height);
+                    }
+                }
+                TAG_TILE_OFFSETS => {
+                    if let Ok(offsets) = reader.get_value_array_u32(entry) {
+                        tile_info.tile_offsets = offsets;
+                    }
+                }
+                TAG_TILE_BYTE_COUNTS => {
+                    if let Ok(counts) = reader.get_value_array_u32(entry) {
+                        tile_info.tile_byte_counts = counts;
                     }
                 }
                 TAG_JPEG_INTERCHANGE_FORMAT | TAG_STRIP_OFFSETS => {
@@ -276,30 +391,70 @@ pub fn scan_dng_file(file_path: &Path) -> ScanResultStatus {
         };
 
         for entry in &entries {
-            if entry.tag == TAG_SAMPLES_PER_PIXEL {
-                if let Ok((is_suspicious, offset)) = reader.check_samples_per_pixel(&entry) {
-                    if is_suspicious {
-                        suspicious_samples_per_pixel = true;
-                        warn!("[!] Suspicious SamplesPerPixel value (2) found at offset 0x{:X}", offset);
+            match entry.tag {
+                TAG_SAMPLES_PER_PIXEL => {
+                    if let Ok((is_suspicious, offset)) = reader.check_samples_per_pixel(&entry) {
+                        if is_suspicious {
+                            suspicious_samples_per_pixel = true;
+                            warn!("[!] Suspicious SamplesPerPixel value (2) found at offset 0x{:X}", offset);
+                        }
                     }
                 }
-            }
-            
-            if entry.tag == TAG_COMPRESSION {
-                if let Ok(compression) = reader.get_value_u16(&entry) {
-                    if compression == JPEG_LOSSLESS_COMPRESSION {
-                        has_jpeg_lossless = true;
+                TAG_COMPRESSION => {
+                    if let Ok(compression) = reader.get_value_u16(&entry) {
+                        if compression == JPEG_LOSSLESS_COMPRESSION {
+                            has_jpeg_lossless = true;
+                            tile_info.is_compressed = true;
+                        }
                     }
                 }
-            }
-            
-            if entry.tag == TAG_JPEG_INTERCHANGE_FORMAT || entry.tag == TAG_STRIP_OFFSETS {
-                if let Ok(offset) = reader.get_value_u32(&entry) {
-                    if offset > 0 {
-                        jpeg_offset = offset;
+                TAG_IMAGE_WIDTH => {
+                    if let Ok(width) = reader.get_value_u32(&entry) {
+                        tile_info.width = Some(width);
                     }
                 }
+                TAG_IMAGE_HEIGHT => {
+                    if let Ok(height) = reader.get_value_u32(&entry) {
+                        tile_info.height = Some(height);
+                    }
+                }
+                TAG_TILE_WIDTH => {
+                    if let Ok(width) = reader.get_value_u32(&entry) {
+                        tile_info.tile_width = Some(width);
+                    }
+                }
+                TAG_TILE_HEIGHT => {
+                    if let Ok(height) = reader.get_value_u32(&entry) {
+                        tile_info.tile_height = Some(height);
+                    }
+                }
+                TAG_TILE_OFFSETS => {
+                    if let Ok(offsets) = reader.get_value_array_u32(&entry) {
+                        tile_info.tile_offsets = offsets;
+                    }
+                }
+                TAG_TILE_BYTE_COUNTS => {
+                    if let Ok(counts) = reader.get_value_array_u32(&entry) {
+                        tile_info.tile_byte_counts = counts;
+                    }
+                }
+                TAG_JPEG_INTERCHANGE_FORMAT | TAG_STRIP_OFFSETS => {
+                    if let Ok(offset) = reader.get_value_u32(&entry) {
+                        if offset > 0 {
+                            jpeg_offset = offset;
+                        }
+                    }
+                }
+                _ => {}
             }
+        }
+    }
+
+    // Validate tile information if tiles are present
+    if !tile_info.tile_offsets.is_empty() || !tile_info.tile_byte_counts.is_empty() {
+        if !reader.validate_tile_info(&tile_info) {
+            error!("[!!!] Suspicious tile configuration detected - potential CVE-2025-43300");
+            return ScanResultStatus::StatusMalicious;
         }
     }
 
