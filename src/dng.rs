@@ -5,7 +5,7 @@
 //  dng.rs
 //
 // Abstract:
-//  ELEGANTBOUNCER DNG scanner for CVE-2025-43300
+//  ELEGANTBOUNCER DNG scanner for CVE-2025-43300, CVE-2025-21043, and tile configuration issues
 //
 // Author:
 //  Matt Suiche (msuiche) 23-Aug-2025
@@ -15,6 +15,13 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use log::{error, warn};
+
+#[derive(Debug, PartialEq)]
+pub enum DngCve {
+    Cve202543300,  // SamplesPerPixel mismatch with suspicious SOF3 component count
+    Cve202521043,  // Excessive opcode count causing OOB write
+    TileConfigIssue,  // Tile configuration vulnerability (no CVE assigned yet)
+}
 
 const TIFF_LITTLE_ENDIAN: u16 = 0x4949;
 const TIFF_BIG_ENDIAN: u16 = 0x4D4D;
@@ -31,9 +38,13 @@ const TAG_TILE_WIDTH: u16 = 0x0142;
 const TAG_TILE_HEIGHT: u16 = 0x0143;
 const TAG_TILE_OFFSETS: u16 = 0x0144;
 const TAG_TILE_BYTE_COUNTS: u16 = 0x0145;
+const TAG_OPCODE_LIST_1: u16 = 0xC740;
+const TAG_OPCODE_LIST_2: u16 = 0xC741;
+const TAG_OPCODE_LIST_3: u16 = 0xC74E;
 
 const JPEG_LOSSLESS_COMPRESSION: u16 = 7;
 const SOF3_MARKER: u16 = 0xFFC3;
+const MAX_OPCODE_COUNT: u32 = 1000000;
 
 #[derive(Debug, Clone)]
 struct IFDEntry {
@@ -193,6 +204,52 @@ impl TIFFReader {
         Ok((is_suspicious, entry.value_offset))
     }
 
+    fn check_opcode_list(&mut self, entry: &IFDEntry) -> std::io::Result<bool> {
+        // Opcode lists have a specific structure:
+        // 4 bytes: count of opcodes (big-endian)
+        // For each opcode: variable structure
+        
+        if entry.count < 4 {
+            // Too small to contain opcode count
+            return Ok(true);
+        }
+        
+        let saved_pos = self.file.stream_position()?;
+        
+        // For inline values (count <= 4), the data is in value_offset
+        // For larger values, we need to seek to the offset
+        if entry.count <= 4 {
+            // Data is inline in value_offset field (4 bytes)
+            // Extract opcode count from the first 4 bytes (big-endian)
+            let opcode_count = entry.value_offset.to_be();
+            
+            if opcode_count > MAX_OPCODE_COUNT {
+                warn!("[!] CVE-2025-21043: Excessive opcode count detected: {} (max: {})", 
+                      opcode_count, MAX_OPCODE_COUNT);
+                return Ok(false);
+            }
+        } else {
+            // Data is at the offset
+            self.seek(entry.value_offset as u64)?;
+            
+            // Read opcode count (stored as big-endian in opcode lists)
+            let mut buf = [0u8; 4];
+            self.file.read_exact(&mut buf)?;
+            let opcode_count = u32::from_be_bytes(buf);
+            
+            if opcode_count > MAX_OPCODE_COUNT {
+                warn!("[!] CVE-2025-21043: Excessive opcode count detected: {} (max: {})", 
+                      opcode_count, MAX_OPCODE_COUNT);
+                self.seek(saved_pos)?;
+                return Ok(false);
+            }
+            
+            self.seek(saved_pos)?;
+        }
+        
+        Ok(true)
+    }
+    
     fn validate_tile_info(&self, tile_info: &TileInfo) -> bool {
         if let (Some(width), Some(height), Some(tile_width), Some(tile_height)) = 
             (tile_info.width, tile_info.height, tile_info.tile_width, tile_info.tile_height) {
@@ -299,15 +356,15 @@ impl TIFFReader {
     }
 }
 
-pub fn scan_dng_file(file_path: &Path) -> ScanResultStatus {
+pub fn scan_dng_file(file_path: &Path) -> (ScanResultStatus, Option<DngCve>) {
     let mut reader = match TIFFReader::new(file_path) {
         Ok(r) => r,
-        Err(_) => return ScanResultStatus::StatusOk,
+        Err(_) => return (ScanResultStatus::StatusOk, None),
     };
 
     let mut ifd_offset = match reader.read_header() {
         Ok(offset) => offset,
-        Err(_) => return ScanResultStatus::StatusOk,
+        Err(_) => return (ScanResultStatus::StatusOk, None),
     };
 
     let mut suspicious_samples_per_pixel = false;
@@ -315,6 +372,7 @@ pub fn scan_dng_file(file_path: &Path) -> ScanResultStatus {
     let mut jpeg_offset = 0u32;
     let mut subifd_offsets = Vec::new();
     let mut tile_info = TileInfo::default();
+    let mut has_excessive_opcodes = false;
     
     while ifd_offset != 0 {
         let (entries, next_ifd) = match reader.read_ifd(ifd_offset) {
@@ -374,6 +432,14 @@ pub fn scan_dng_file(file_path: &Path) -> ScanResultStatus {
                     if let Ok(offset) = reader.get_value_u32(entry) {
                         if offset > 0 {
                             jpeg_offset = offset;
+                        }
+                    }
+                }
+                TAG_OPCODE_LIST_1 | TAG_OPCODE_LIST_2 | TAG_OPCODE_LIST_3 => {
+                    if let Ok(is_valid) = reader.check_opcode_list(entry) {
+                        if !is_valid {
+                            has_excessive_opcodes = true;
+                            error!("[!!!] CVE-2025-21043: Excessive opcode count in tag 0x{:04X}", entry.tag);
                         }
                     }
                 }
@@ -445,16 +511,30 @@ pub fn scan_dng_file(file_path: &Path) -> ScanResultStatus {
                         }
                     }
                 }
+                TAG_OPCODE_LIST_1 | TAG_OPCODE_LIST_2 | TAG_OPCODE_LIST_3 => {
+                    if let Ok(is_valid) = reader.check_opcode_list(&entry) {
+                        if !is_valid {
+                            has_excessive_opcodes = true;
+                            error!("[!!!] CVE-2025-21043: Excessive opcode count in SubIFD tag 0x{:04X}", entry.tag);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
     }
 
+    // Check for CVE-2025-21043 (excessive opcode count)
+    if has_excessive_opcodes {
+        error!("[!!!] CVE-2025-21043 detected: Excessive opcode count in DNG file");
+        return (ScanResultStatus::StatusMalicious, Some(DngCve::Cve202521043));
+    }
+    
     // Validate tile information if tiles are present
     if !tile_info.tile_offsets.is_empty() || !tile_info.tile_byte_counts.is_empty() {
         if !reader.validate_tile_info(&tile_info) {
-            error!("[!!!] Suspicious tile configuration detected - potential CVE-2025-43300");
-            return ScanResultStatus::StatusMalicious;
+            error!("[!!!] Suspicious tile configuration detected - potential vulnerability");
+            return (ScanResultStatus::StatusMalicious, Some(DngCve::TileConfigIssue));
         }
     }
 
@@ -465,11 +545,11 @@ pub fn scan_dng_file(file_path: &Path) -> ScanResultStatus {
                 
                 if suspicious_samples_per_pixel {
                     error!("[!!!] CVE-2025-43300 detected: Modified SamplesPerPixel + SOF3 component count");
-                    return ScanResultStatus::StatusMalicious;
+                    return (ScanResultStatus::StatusMalicious, Some(DngCve::Cve202543300));
                 }
             }
         }
     }
 
-    ScanResultStatus::StatusOk
+    (ScanResultStatus::StatusOk, None)
 }

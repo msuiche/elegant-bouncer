@@ -181,7 +181,9 @@ pub struct ScanResult {
     pub forcedentry: bool,
     pub blastpass: bool,
     pub triangulation: bool,
-    pub cve_2025_43300: bool,
+    pub cve_2025_43300: bool,  // SamplesPerPixel mismatch with SOF3 component count
+    pub cve_2025_21043: bool,  // DNG excessive opcode count OOB write
+    pub dng_tile_issue: bool,  // DNG tile configuration vulnerability (no CVE yet)
 }
 
 #[derive(Clone)]
@@ -212,7 +214,7 @@ fn collect_suspicious_files(
     fs::create_dir_all(output_dir)?;
     
     // Create subdirectories for each threat type
-    let threat_dirs = vec!["FORCEDENTRY", "BLASTPASS", "TRIANGULATION", "CVE-2025-43300", "MULTIPLE_THREATS"];
+    let threat_dirs = vec!["FORCEDENTRY", "BLASTPASS", "TRIANGULATION", "CVE-2025-43300", "CVE-2025-21043", "DNG-TILE-ISSUE", "MULTIPLE_THREATS"];
     for dir in &threat_dirs {
         fs::create_dir_all(output_dir.join(dir))?;
     }
@@ -341,6 +343,8 @@ pub fn scan_single_file_with_name_and_options(path: &Path, original_name: Option
         blastpass: false,
         triangulation: false,
         cve_2025_43300: false,
+        cve_2025_21043: false,
+        dng_tile_issue: false,
     };
 
     // Check whitelist unless bypass is enabled
@@ -408,11 +412,17 @@ pub fn scan_single_file_with_name_and_options(path: &Path, original_name: Option
         }
     }
 
-    // CVE-2025-43300 scan - only for DNG/TIFF files
+    // DNG CVE scans - only for DNG/TIFF files
     if should_scan_for_threat(&file_type, "cve_2025_43300") {
-        let dng_status = dng::scan_dng_file(path);
+        let (dng_status, cve_type) = dng::scan_dng_file(path);
         if dng_status == ScanResultStatus::StatusMalicious {
-            result.cve_2025_43300 = true;
+            if let Some(cve) = cve_type {
+                match cve {
+                    dng::DngCve::Cve202543300 => result.cve_2025_43300 = true,
+                    dng::DngCve::Cve202521043 => result.cve_2025_21043 = true,
+                    dng::DngCve::TileConfigIssue => result.dng_tile_issue = true,
+                }
+            }
         }
     }
 
@@ -472,7 +482,13 @@ fn main() -> Result<()> {
             "TRIANGULATION  ".red()
         );
         println!("    {}  CVE-2025-43300", 
-            "DNG EXPLOIT    ".red()
+            "DNG ITW EXPLOIT (iOS)".red()
+        );
+        println!("    {}  CVE-2025-21043", 
+            "DNG ITW EXPLOIT OOB (Android)".red()
+        );
+        println!("    {}  DNG Tile Issue", 
+            "DNG TILE CONFIG".red()
         );
         println!("  {}", "────────────────────────────────────────────────────────────────".bright_black());
         println!("  {}:     Matt Suiche (@msuiche)", "Author".bright_black());
@@ -728,7 +744,7 @@ fn main() -> Result<()> {
                 };
                 
                 // Report if any threats found
-                if result.forcedentry || result.blastpass || result.triangulation || result.cve_2025_43300 {
+                if result.forcedentry || result.blastpass || result.triangulation || result.cve_2025_43300 || result.cve_2025_21043 || result.dng_tile_issue {
                     let mut count = threat_count.lock().unwrap();
                     *count += 1;
                     
@@ -750,6 +766,8 @@ fn main() -> Result<()> {
                         if result.blastpass { threats.push("BLASTPASS"); }
                         if result.triangulation { threats.push("TRIANGULATION"); }
                         if result.cve_2025_43300 { threats.push("CVE-2025-43300"); }
+                        if result.cve_2025_21043 { threats.push("CVE-2025-21043"); }
+                        if result.dng_tile_issue { threats.push("DNG-TILE-ISSUE"); }
                         println!("{}", threats.join(", ").red().bold());
                     });
                 }
@@ -793,6 +811,8 @@ fn main() -> Result<()> {
         let mut blastpass_detected = false;
         let mut triangulation_detected = false;
         let mut cve_2025_43300_detected = false;
+        let mut cve_2025_21043_detected = false;
+        let mut dng_tile_issue_detected = false;
         let mut infected_files = Vec::new();
         let mut suspicious_files: Vec<SuspiciousFile> = Vec::new();
 
@@ -818,6 +838,16 @@ fn main() -> Result<()> {
                 cve_2025_43300_detected = true;
                 infected_files.push(result.file_path.clone());
                 threats.push("CVE-2025-43300".to_string());
+            }
+            if result.cve_2025_21043 {
+                cve_2025_21043_detected = true;
+                infected_files.push(result.file_path.clone());
+                threats.push("CVE-2025-21043".to_string());
+            }
+            if result.dng_tile_issue {
+                dng_tile_issue_detected = true;
+                infected_files.push(result.file_path.clone());
+                threats.push("DNG-TILE-ISSUE".to_string());
             }
             
             // If any threats found, add to suspicious files
@@ -864,8 +894,20 @@ fn main() -> Result<()> {
             Results {
                 name: "CVE-2025-43300",
                 cve_ids: "CVE-2025-43300",
-                description: "Malicious DNG with JPEG Lossless compression exploiting RawCamera.bundle",
+                description: "Malicious DNG with SamplesPerPixel/SOF3 mismatch in RawCamera.bundle",
                 detected: cve_2025_43300_detected,
+            },
+            Results {
+                name: "CVE-2025-21043",
+                cve_ids: "CVE-2025-21043",
+                description: "Malicious DNG with excessive opcode count causing OOB write (libimagecodec.quram.so)",
+                detected: cve_2025_21043_detected,
+            },
+            Results {
+                name: "DNG Tile Issue",
+                cve_ids: "No CVE (potential vulnerability)",
+                description: "Malicious DNG with tile configuration issues",
+                detected: dng_tile_issue_detected,
             },
         ];
 
@@ -918,6 +960,22 @@ fn main() -> Result<()> {
                         path: path_str.clone(),
                         threat_name: "CVE-2025-43300".to_string(),
                         cve_ids: "CVE-2025-43300".to_string(),
+                    });
+                }
+                
+                if result.cve_2025_21043 {
+                    infected_details.push(InfectedFile {
+                        path: path_str.clone(),
+                        threat_name: "CVE-2025-21043".to_string(),
+                        cve_ids: "CVE-2025-21043".to_string(),
+                    });
+                }
+                
+                if result.dng_tile_issue {
+                    infected_details.push(InfectedFile {
+                        path: path_str.clone(),
+                        threat_name: "DNG Tile Issue".to_string(),
+                        cve_ids: "No CVE assigned".to_string(),
                     });
                 }
             }
