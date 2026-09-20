@@ -12,12 +12,20 @@ It employs an innovative approach for advanced file-based threat identification,
 | BLASTPASS      | CVE-2023-4863, CVE-2023-41064   | :white_check_mark: |
 | TRIANGULATION  | CVE-2023-41990                  | :white_check_mark: |
 | CVE-2025-43300 | CVE-2025-43300                  | :white_check_mark: |
+| CVE-2025-21043 | CVE-2025-21043                  | :white_check_mark: |
+| CVE-2026-32741 | CVE-2026-32741                  | :white_check_mark: |
+| HEIF mask underfill | No CVE (libheif <= 1.21.2) | :white_check_mark: |
+| CVE-2026-32882 | CVE-2026-32882, CVE-2025-68431  | :white_check_mark: |
+| CVE-2026-84383 | CVE-2026-84383                  | :white_check_mark: |
 
 ![output of the detection tool](./documentation/elegantbouncer.png)
 
 ### Learn more
 - [FORCEDENTRY](documentation/FORCEDENTRY.md)
 - [BLASTPASS](documentation/BLASTPASS.md)
+- [CVE-2026-32741 and the libheif mask underfill](documentation/CVE-2026-32741.md)
+- [CVE-2026-32882: libheif overlay alpha over-read](documentation/CVE-2026-32882.md)
+- [CVE-2026-84383: libheif duplicate Alpha plane overflow](documentation/CVE-2026-84383.md)
 
 ## Terminal User Interface
 
@@ -66,7 +74,7 @@ Options:
 
   -e, --extensions <EXTENSIONS>
           File extensions to scan (comma-separated, e.g., "pdf,webp,ttf")
-          Default: pdf,gif,webp,jpg,jpeg,png,tif,tiff,dng,ttf,otf
+          Default: pdf,gif,webp,jpg,jpeg,png,tif,tiff,dng,heic,heif,hif,avif,ttf,otf
 
   -h, --help
           Print help information (use `-h` for a summary)
@@ -125,7 +133,7 @@ When scanning a directory, the tool provides:
 ```
 [+] Scanning directory: /path/to/documents
 [+] Recursive mode enabled
-[+] Extensions: pdf, gif, webp, jpg, jpeg, png, tif, tiff, dng, ttf, otf
+[+] Extensions: pdf, gif, webp, jpg, jpeg, png, tif, tiff, dng, heic, heif, hif, avif, ttf, otf
 
 [1] Scanning: /path/to/documents/invoice.pdf
 [2] Scanning: /path/to/documents/photo.jpg

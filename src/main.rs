@@ -19,6 +19,7 @@ mod jbig2;
 mod webp;
 mod ttf;
 mod dng;
+mod heif;
 mod errors;
 mod huffman;
 mod tui;
@@ -161,6 +162,10 @@ fn get_default_extensions() -> Vec<String> {
         "tif".to_string(),
         "tiff".to_string(),
         "dng".to_string(),
+        "heic".to_string(),
+        "heif".to_string(),
+        "hif".to_string(),
+        "avif".to_string(),
         "ttf".to_string(),
         "otf".to_string(),
     ]
@@ -184,6 +189,10 @@ pub struct ScanResult {
     pub cve_2025_43300: bool,  // SamplesPerPixel mismatch with SOF3 component count
     pub cve_2025_21043: bool,  // DNG excessive opcode count OOB write
     pub dng_tile_issue: bool,  // DNG tile configuration vulnerability (no CVE yet)
+    pub cve_2026_32741: bool,  // HEIF/AVIF mask image heap overflow (libheif)
+    pub heif_mask_disclosure: bool,  // HEIF/AVIF 16-bpp mask underfill leaking heap memory (no CVE)
+    pub cve_2026_32882: bool,  // HEIF/AVIF overlay alpha over-read (libheif)
+    pub cve_2026_84383: bool,  // HEIF/AVIF duplicate alpha scaler overflow (libheif)
 }
 
 #[derive(Clone)]
@@ -324,6 +333,10 @@ fn should_scan_for_threat(file_type: &str, threat_type: &str) -> bool {
             // CVE-2025-43300 is in DNG files
             matches!(file_type, "dng" | "tif" | "tiff")
         }
+        "cve_2026_32741" => {
+            // libheif mask image defects are in HEIF/AVIF containers
+            matches!(file_type, "heic" | "heif" | "heix" | "hif" | "avif" | "avifs" | "heics" | "heifs")
+        }
         _ => true
     }
 }
@@ -345,6 +358,10 @@ pub fn scan_single_file_with_name_and_options(path: &Path, original_name: Option
         cve_2025_43300: false,
         cve_2025_21043: false,
         dng_tile_issue: false,
+        cve_2026_32741: false,
+        heif_mask_disclosure: false,
+        cve_2026_32882: false,
+        cve_2026_84383: false,
     };
 
     // Check whitelist unless bypass is enabled
@@ -426,6 +443,21 @@ pub fn scan_single_file_with_name_and_options(path: &Path, original_name: Option
         }
     }
 
+    // libheif item graph scans - only for HEIF/AVIF containers
+    if should_scan_for_threat(&file_type, "cve_2026_32741") {
+        let (heif_status, heif_cves) = heif::scan_heif_file_all(path);
+        if heif_status == ScanResultStatus::StatusMalicious {
+            for cve in heif_cves {
+                match cve {
+                    heif::HeifCve::Cve202632741 => result.cve_2026_32741 = true,
+                    heif::HeifCve::MaskUninitDisclosure => result.heif_mask_disclosure = true,
+                    heif::HeifCve::Cve202632882 => result.cve_2026_32882 = true,
+                    heif::HeifCve::Cve202684383 => result.cve_2026_84383 = true,
+                }
+            }
+        }
+    }
+
     result
 }
 
@@ -489,6 +521,18 @@ fn main() -> Result<()> {
         );
         println!("    {}  DNG Tile Issue", 
             "DNG TILE CONFIG".red()
+        );
+        println!("    {}  CVE-2026-32741", 
+            "HEIF MASK OVERFLOW (libheif)".red()
+        );
+        println!("    {}  Uninitialised heap disclosure", 
+            "HEIF MASK UNDERFILL".red()
+        );
+        println!("    {}  CVE-2026-32882", 
+            "HEIF OVERLAY OVER-READ".red()
+        );
+        println!("    {}  CVE-2026-84383", 
+            "HEIF DUPLICATE ALPHA".red()
         );
         println!("  {}", "────────────────────────────────────────────────────────────────".bright_black());
         println!("  {}:     Matt Suiche (@msuiche)", "Author".bright_black());
@@ -744,7 +788,7 @@ fn main() -> Result<()> {
                 };
                 
                 // Report if any threats found
-                if result.forcedentry || result.blastpass || result.triangulation || result.cve_2025_43300 || result.cve_2025_21043 || result.dng_tile_issue {
+                if result.forcedentry || result.blastpass || result.triangulation || result.cve_2025_43300 || result.cve_2025_21043 || result.dng_tile_issue || result.cve_2026_32741 || result.heif_mask_disclosure || result.cve_2026_32882 || result.cve_2026_84383 {
                     let mut count = threat_count.lock().unwrap();
                     *count += 1;
                     
@@ -768,6 +812,10 @@ fn main() -> Result<()> {
                         if result.cve_2025_43300 { threats.push("CVE-2025-43300"); }
                         if result.cve_2025_21043 { threats.push("CVE-2025-21043"); }
                         if result.dng_tile_issue { threats.push("DNG-TILE-ISSUE"); }
+                        if result.cve_2026_32741 { threats.push("CVE-2026-32741"); }
+                        if result.heif_mask_disclosure { threats.push("HEIF-MASK-DISCLOSURE"); }
+                        if result.cve_2026_32882 { threats.push("CVE-2026-32882"); }
+                        if result.cve_2026_84383 { threats.push("CVE-2026-84383"); }
                         println!("{}", threats.join(", ").red().bold());
                     });
                 }
@@ -813,6 +861,10 @@ fn main() -> Result<()> {
         let mut cve_2025_43300_detected = false;
         let mut cve_2025_21043_detected = false;
         let mut dng_tile_issue_detected = false;
+        let mut cve_2026_32741_detected = false;
+        let mut heif_mask_disclosure_detected = false;
+        let mut cve_2026_32882_detected = false;
+        let mut cve_2026_84383_detected = false;
         let mut infected_files = Vec::new();
         let mut suspicious_files: Vec<SuspiciousFile> = Vec::new();
 
@@ -848,6 +900,26 @@ fn main() -> Result<()> {
                 dng_tile_issue_detected = true;
                 infected_files.push(result.file_path.clone());
                 threats.push("DNG-TILE-ISSUE".to_string());
+            }
+            if result.cve_2026_32741 {
+                cve_2026_32741_detected = true;
+                infected_files.push(result.file_path.clone());
+                threats.push("CVE-2026-32741".to_string());
+            }
+            if result.heif_mask_disclosure {
+                heif_mask_disclosure_detected = true;
+                infected_files.push(result.file_path.clone());
+                threats.push("HEIF-MASK-DISCLOSURE".to_string());
+            }
+            if result.cve_2026_32882 {
+                cve_2026_32882_detected = true;
+                infected_files.push(result.file_path.clone());
+                threats.push("CVE-2026-32882".to_string());
+            }
+            if result.cve_2026_84383 {
+                cve_2026_84383_detected = true;
+                infected_files.push(result.file_path.clone());
+                threats.push("CVE-2026-84383".to_string());
             }
             
             // If any threats found, add to suspicious files
@@ -909,13 +981,37 @@ fn main() -> Result<()> {
                 description: "Malicious DNG with tile configuration issues",
                 detected: dng_tile_issue_detected,
             },
+            Results {
+                name: "CVE-2026-32741",
+                cve_ids: "CVE-2026-32741",
+                description: "Malicious HEIF/AVIF mask image overflowing the plane allocation in libheif",
+                detected: cve_2026_32741_detected,
+            },
+            Results {
+                name: "HEIF Mask Disclosure",
+                cve_ids: "No CVE (libheif <= 1.21.2)",
+                description: "Malicious HEIF/AVIF 16-bpp mask image leaking uninitialised heap memory",
+                detected: heif_mask_disclosure_detected,
+            },
+            Results {
+                name: "CVE-2026-32882",
+                cve_ids: "CVE-2026-32882",
+                description: "Malicious HEIF/AVIF overlay whose alpha is shallower than its colour, over-reading the heap in libheif",
+                detected: cve_2026_32882_detected,
+            },
+            Results {
+                name: "CVE-2026-84383",
+                cve_ids: "CVE-2026-84383",
+                description: "Malicious HEIF/AVIF item graph with duplicated alpha planes overflowing the libheif scaler",
+                detected: cve_2026_84383_detected,
+            },
         ];
 
         let table = Table::new(results).with(Style::rounded()).to_string();
         println!("{}", table);
 
         // Show detailed infected files table if any threats found
-        if !all_scan_results.iter().any(|r| r.forcedentry || r.blastpass || r.triangulation || r.cve_2025_43300) {
+        if !all_scan_results.iter().any(|r| r.forcedentry || r.blastpass || r.triangulation || r.cve_2025_43300 || r.cve_2025_21043 || r.dng_tile_issue || r.cve_2026_32741 || r.heif_mask_disclosure || r.cve_2026_32882 || r.cve_2026_84383) {
             // No threats found
         } else {
             // Build detailed infected files list
@@ -976,6 +1072,38 @@ fn main() -> Result<()> {
                         path: path_str.clone(),
                         threat_name: "DNG Tile Issue".to_string(),
                         cve_ids: "No CVE assigned".to_string(),
+                    });
+                }
+
+                if result.cve_2026_32741 {
+                    infected_details.push(InfectedFile {
+                        path: path_str.clone(),
+                        threat_name: "CVE-2026-32741".to_string(),
+                        cve_ids: "CVE-2026-32741".to_string(),
+                    });
+                }
+
+                if result.heif_mask_disclosure {
+                    infected_details.push(InfectedFile {
+                        path: path_str.clone(),
+                        threat_name: "HEIF Mask Disclosure".to_string(),
+                        cve_ids: "No CVE assigned".to_string(),
+                    });
+                }
+
+                if result.cve_2026_32882 {
+                    infected_details.push(InfectedFile {
+                        path: path_str.clone(),
+                        threat_name: "CVE-2026-32882".to_string(),
+                        cve_ids: "CVE-2026-32882".to_string(),
+                    });
+                }
+
+                if result.cve_2026_84383 {
+                    infected_details.push(InfectedFile {
+                        path: path_str.clone(),
+                        threat_name: "CVE-2026-84383".to_string(),
+                        cve_ids: "CVE-2026-84383".to_string(),
                     });
                 }
             }

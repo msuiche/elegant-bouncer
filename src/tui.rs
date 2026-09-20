@@ -224,6 +224,54 @@ pub fn run_tui_scan_with_origins(files: Vec<PathBuf>, origins: Vec<Option<String
                         timestamp: Instant::now(),
                     });
                 }
+                if result.cve_2025_21043 {
+                    state.threats.push(ThreatInfo {
+                        file_path: threat_display_path.clone(),
+                        threat_type: "CVE-2025-21043".to_string(),
+                        cve_ids: "CVE-2025-21043".to_string(),
+                        timestamp: Instant::now(),
+                    });
+                }
+                if result.dng_tile_issue {
+                    state.threats.push(ThreatInfo {
+                        file_path: threat_display_path.clone(),
+                        threat_type: "DNG Tile Issue".to_string(),
+                        cve_ids: "No CVE assigned".to_string(),
+                        timestamp: Instant::now(),
+                    });
+                }
+                if result.cve_2026_32741 {
+                    state.threats.push(ThreatInfo {
+                        file_path: threat_display_path.clone(),
+                        threat_type: "CVE-2026-32741".to_string(),
+                        cve_ids: "CVE-2026-32741".to_string(),
+                        timestamp: Instant::now(),
+                    });
+                }
+                if result.heif_mask_disclosure {
+                    state.threats.push(ThreatInfo {
+                        file_path: threat_display_path.clone(),
+                        threat_type: "HEIF Mask Disclosure".to_string(),
+                        cve_ids: "No CVE assigned".to_string(),
+                        timestamp: Instant::now(),
+                    });
+                }
+                if result.cve_2026_32882 {
+                    state.threats.push(ThreatInfo {
+                        file_path: threat_display_path.clone(),
+                        threat_type: "CVE-2026-32882".to_string(),
+                        cve_ids: "CVE-2026-32882".to_string(),
+                        timestamp: Instant::now(),
+                    });
+                }
+                if result.cve_2026_84383 {
+                    state.threats.push(ThreatInfo {
+                        file_path: threat_display_path.clone(),
+                        threat_type: "CVE-2026-84383".to_string(),
+                        cve_ids: "CVE-2026-84383".to_string(),
+                        timestamp: Instant::now(),
+                    });
+                }
                 
                 // Update files scanned count
                 let count = files_scanned.fetch_add(1, Ordering::Relaxed) + 1;
