@@ -18,6 +18,7 @@
 mod jbig2;
 mod webp;
 mod ttf;
+mod glyph;
 mod dng;
 mod heif;
 mod errors;
@@ -44,7 +45,6 @@ use clap::Parser;
 use crate::jbig2 as FORCEDENTRY;
 use crate::webp as BLASTPASS;
 use crate::ttf as TRIANGULATION;
-
 use crate::errors::*;
 
 use tabled::{Tabled, Table, settings::{Style}};
@@ -193,6 +193,7 @@ pub struct ScanResult {
     pub heif_mask_disclosure: bool,  // HEIF/AVIF 16-bpp mask underfill leaking heap memory (no CVE)
     pub cve_2026_32882: bool,  // HEIF/AVIF overlay alpha over-read (libheif)
     pub cve_2026_84383: bool,  // HEIF/AVIF duplicate alpha scaler overflow (libheif)
+    pub cve_2026_86950: bool,  // CoreGraphics glyph rasterizer fixed-point overflow ("The Great Glyph Grift")
 }
 
 #[derive(Clone)]
@@ -223,7 +224,7 @@ fn collect_suspicious_files(
     fs::create_dir_all(output_dir)?;
     
     // Create subdirectories for each threat type
-    let threat_dirs = vec!["FORCEDENTRY", "BLASTPASS", "TRIANGULATION", "CVE-2025-43300", "CVE-2025-21043", "DNG-TILE-ISSUE", "MULTIPLE_THREATS"];
+    let threat_dirs = vec!["FORCEDENTRY", "BLASTPASS", "TRIANGULATION", "CVE-2025-43300", "CVE-2025-21043", "DNG-TILE-ISSUE", "CVE-2026-32741", "HEIF-MASK-DISCLOSURE", "CVE-2026-32882", "CVE-2026-84383", "CVE-2026-86950", "MULTIPLE_THREATS"];
     for dir in &threat_dirs {
         fs::create_dir_all(output_dir.join(dir))?;
     }
@@ -329,6 +330,11 @@ fn should_scan_for_threat(file_type: &str, threat_type: &str) -> bool {
             // PDFs can embed fonts but we don't parse fonts from PDFs atm.
             matches!(file_type, "ttf" | "otf" )
         }
+        "cve_2026_86950" => {
+            // CVE-2026-86950 lives in TrueType glyph outlines, standalone or
+            // embedded in PDFs as FontFile2 (rendered zero-click via PDF preview).
+            matches!(file_type, "pdf" | "ttf" | "otf" )
+        }
         "cve_2025_43300" => {
             // CVE-2025-43300 is in DNG files
             matches!(file_type, "dng" | "tif" | "tiff")
@@ -362,6 +368,7 @@ pub fn scan_single_file_with_name_and_options(path: &Path, original_name: Option
         heif_mask_disclosure: false,
         cve_2026_32882: false,
         cve_2026_84383: false,
+        cve_2026_86950: false,
     };
 
     // Check whitelist unless bypass is enabled
@@ -423,6 +430,23 @@ pub fn scan_single_file_with_name_and_options(path: &Path, original_name: Option
             Ok(status) => {
                 if status == ScanResultStatus::StatusMalicious {
                     result.triangulation = true;
+                }
+            },
+            Err(_) => {}
+        }
+    }
+
+    // CVE-2026-86950 scan - glyph fixed-point overflow, font files and PDFs
+    if should_scan_for_threat(&file_type, "cve_2026_86950") {
+        let scan = if file_type == "pdf" {
+            glyph::scan_pdf_file(path)
+        } else {
+            glyph::scan_ttf_file(path)
+        };
+        match scan {
+            Ok(status) => {
+                if status == ScanResultStatus::StatusMalicious {
+                    result.cve_2026_86950 = true;
                 }
             },
             Err(_) => {}
@@ -533,6 +557,9 @@ fn main() -> Result<()> {
         );
         println!("    {}  CVE-2026-84383", 
             "HEIF DUPLICATE ALPHA".red()
+        );
+        println!("    {}  CVE-2026-86950", 
+            "GLYPH FIXED-POINT OVERFLOW (CoreGraphics)".red()
         );
         println!("  {}", "────────────────────────────────────────────────────────────────".bright_black());
         println!("  {}:     Matt Suiche (@msuiche)", "Author".bright_black());
@@ -788,7 +815,7 @@ fn main() -> Result<()> {
                 };
                 
                 // Report if any threats found
-                if result.forcedentry || result.blastpass || result.triangulation || result.cve_2025_43300 || result.cve_2025_21043 || result.dng_tile_issue || result.cve_2026_32741 || result.heif_mask_disclosure || result.cve_2026_32882 || result.cve_2026_84383 {
+                if result.forcedentry || result.blastpass || result.triangulation || result.cve_2025_43300 || result.cve_2025_21043 || result.dng_tile_issue || result.cve_2026_32741 || result.heif_mask_disclosure || result.cve_2026_32882 || result.cve_2026_84383 || result.cve_2026_86950 {
                     let mut count = threat_count.lock().unwrap();
                     *count += 1;
                     
@@ -816,6 +843,7 @@ fn main() -> Result<()> {
                         if result.heif_mask_disclosure { threats.push("HEIF-MASK-DISCLOSURE"); }
                         if result.cve_2026_32882 { threats.push("CVE-2026-32882"); }
                         if result.cve_2026_84383 { threats.push("CVE-2026-84383"); }
+                        if result.cve_2026_86950 { threats.push("CVE-2026-86950"); }
                         println!("{}", threats.join(", ").red().bold());
                     });
                 }
@@ -864,6 +892,7 @@ fn main() -> Result<()> {
         let mut cve_2026_32741_detected = false;
         let mut heif_mask_disclosure_detected = false;
         let mut cve_2026_32882_detected = false;
+        let mut cve_2026_86950_detected = false;
         let mut cve_2026_84383_detected = false;
         let mut infected_files = Vec::new();
         let mut suspicious_files: Vec<SuspiciousFile> = Vec::new();
@@ -920,6 +949,11 @@ fn main() -> Result<()> {
                 cve_2026_84383_detected = true;
                 infected_files.push(result.file_path.clone());
                 threats.push("CVE-2026-84383".to_string());
+            }
+            if result.cve_2026_86950 {
+                cve_2026_86950_detected = true;
+                infected_files.push(result.file_path.clone());
+                threats.push("CVE-2026-86950".to_string());
             }
             
             // If any threats found, add to suspicious files
@@ -1005,13 +1039,19 @@ fn main() -> Result<()> {
                 description: "Malicious HEIF/AVIF item graph with duplicated alpha planes overflowing the libheif scaler",
                 detected: cve_2026_84383_detected,
             },
+            Results {
+                name: "CVE-2026-86950",
+                cve_ids: "CVE-2026-86950",
+                description: "Malicious TTF glyph with composite-scaled coordinates overflowing the CoreGraphics rasterizer",
+                detected: cve_2026_86950_detected,
+            },
         ];
 
         let table = Table::new(results).with(Style::rounded()).to_string();
         println!("{}", table);
 
         // Show detailed infected files table if any threats found
-        if !all_scan_results.iter().any(|r| r.forcedentry || r.blastpass || r.triangulation || r.cve_2025_43300 || r.cve_2025_21043 || r.dng_tile_issue || r.cve_2026_32741 || r.heif_mask_disclosure || r.cve_2026_32882 || r.cve_2026_84383) {
+        if !all_scan_results.iter().any(|r| r.forcedentry || r.blastpass || r.triangulation || r.cve_2025_43300 || r.cve_2025_21043 || r.dng_tile_issue || r.cve_2026_32741 || r.heif_mask_disclosure || r.cve_2026_32882 || r.cve_2026_84383 || r.cve_2026_86950) {
             // No threats found
         } else {
             // Build detailed infected files list
@@ -1104,6 +1144,13 @@ fn main() -> Result<()> {
                         path: path_str.clone(),
                         threat_name: "CVE-2026-84383".to_string(),
                         cve_ids: "CVE-2026-84383".to_string(),
+                    });
+                }
+                if result.cve_2026_86950 {
+                    infected_details.push(InfectedFile {
+                        path: path_str.clone(),
+                        threat_name: "CVE-2026-86950".to_string(),
+                        cve_ids: "CVE-2026-86950".to_string(),
                     });
                 }
             }

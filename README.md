@@ -16,7 +16,7 @@ It employs an innovative approach for advanced file-based threat identification,
 | CVE-2026-32741 | CVE-2026-32741                  | :white_check_mark: |
 | HEIF mask underfill | No CVE (libheif <= 1.21.2) | :white_check_mark: |
 | CVE-2026-32882 | CVE-2026-32882, CVE-2025-68431  | :white_check_mark: |
-| CVE-2026-84383 | CVE-2026-84383                  | :white_check_mark: |
+| CVE-2026-86950 | CVE-2026-86950                  | :white_check_mark: |
 
 ![output of the detection tool](./documentation/elegantbouncer.png)
 
@@ -26,6 +26,7 @@ It employs an innovative approach for advanced file-based threat identification,
 - [CVE-2026-32741 and the libheif mask underfill](documentation/CVE-2026-32741.md)
 - [CVE-2026-32882: libheif overlay alpha over-read](documentation/CVE-2026-32882.md)
 - [CVE-2026-84383: libheif duplicate Alpha plane overflow](documentation/CVE-2026-84383.md)
+- [CVE-2026-86950: CoreGraphics glyph fixed-point overflow](documentation/CVE-2026-86950.md)
 
 ## Terminal User Interface
 

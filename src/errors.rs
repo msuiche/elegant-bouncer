@@ -18,6 +18,7 @@ use thiserror::Error;
 
 use crate::webp::WebpError;
 use crate::ttf::TtfError;
+use crate::glyph::GlyphError;
 // use crate::huffman::HuffmanError;
 
 #[derive(Debug, Error)]
@@ -34,6 +35,8 @@ pub enum ElegantError {
     #[error("TTF error: {0}")]
     TtfError(TtfError),
 
+    #[error("Glyph error: {0}")]
+    GlyphError(GlyphError),
     /*
     #[error("Huffman error: {0}")]
     HuffmanError(HuffmanError),

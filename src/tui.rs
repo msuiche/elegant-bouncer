@@ -272,6 +272,14 @@ pub fn run_tui_scan_with_origins(files: Vec<PathBuf>, origins: Vec<Option<String
                         timestamp: Instant::now(),
                     });
                 }
+                if result.cve_2026_86950 {
+                    state.threats.push(ThreatInfo {
+                        file_path: threat_display_path.clone(),
+                        threat_type: "CVE-2026-86950".to_string(),
+                        cve_ids: "CVE-2026-86950".to_string(),
+                        timestamp: Instant::now(),
+                    });
+                }
                 
                 // Update files scanned count
                 let count = files_scanned.fetch_add(1, Ordering::Relaxed) + 1;

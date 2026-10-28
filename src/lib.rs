@@ -1,6 +1,7 @@
 pub mod jbig2;
 pub mod webp;
 pub mod ttf;
+pub mod glyph;
 pub mod dng;
 pub mod heif;
 pub mod errors;

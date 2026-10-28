@@ -42,6 +42,7 @@ The codebase is organized as a Rust library with a CLI binary:
   - `src/jbig2.rs` - FORCEDENTRY detection for malicious JBIG2 PDFs
   - `src/webp.rs` - BLASTPASS detection for malicious WebP VP8L files  
   - `src/ttf.rs` - TRIANGULATION detection for malicious TrueType fonts
+  - `src/glyph.rs` - CVE-2026-86950 detection for glyph fixed-point overflow in TrueType fonts (standalone or embedded in PDFs)
   - `src/huffman.rs` - Huffman coding utilities used by detection algorithms
   - `src/errors.rs` - Error types and `ScanResultStatus` enum
 

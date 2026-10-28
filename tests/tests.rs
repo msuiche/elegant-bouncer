@@ -1,6 +1,7 @@
 use elegantbouncer::webp::{is_code_lengths_count_valid, scan_webp_vp8l_file, MAX_DISTANCE_TABLE_SIZE};
 use elegantbouncer::jbig2::scan_pdf_jbig2_file;
 use elegantbouncer::ttf::scan_ttf_file;
+use elegantbouncer::glyph::{scan_ttf_file as scan_glyph_ttf_file, scan_pdf_file as scan_glyph_pdf_file};
 use elegantbouncer::dng::scan_dng_file;
 use elegantbouncer::heif::{scan_heif_file, HeifCve};
 
@@ -50,6 +51,44 @@ mod tests {
         let res = scan_ttf_file(path);
 
         assert_eq!(res.ok(), Some(ScanResultStatus::StatusOk));
+    }
+
+    // CVE-2026-86950 — CoreGraphics glyph rasterizer fixed-point overflow
+    // ("The Great Glyph Grift"). Composite-scaled glyph coordinates beyond the
+    // aa_double_to_fixed() int32 range, standalone or embedded in a PDF.
+
+    #[test]
+    fn test_cve_2026_86950_malicious_ttf() {
+        let path = Path::new("tests/samples/CVE-2026-86950.ttf");
+        let res = scan_glyph_ttf_file(path);
+
+        assert_eq!(res.ok(), Some(ScanResultStatus::StatusMalicious));
+    }
+
+    #[test]
+    fn test_cve_2026_86950_malicious_pdf() {
+        let path = Path::new("tests/samples/CVE-2026-86950.pdf");
+        let res = scan_glyph_pdf_file(path);
+
+        assert_eq!(res.ok(), Some(ScanResultStatus::StatusMalicious));
+    }
+
+    #[test]
+    fn test_cve_2026_86950_benign_ttf() {
+        let path = Path::new("tests/samples/07558_CenturyGothic.ttf");
+        let res = scan_glyph_ttf_file(path);
+
+        assert_eq!(res.ok(), Some(ScanResultStatus::StatusOk));
+    }
+
+    #[test]
+    fn test_cve_2026_86950_benign_non_ttf_stream() {
+        // Non-font files and non-glyf (CFF) font programs must stay benign.
+        let webp = Path::new("tests/samples/BLASTPASS.webp");
+        assert_eq!(scan_glyph_ttf_file(webp).ok(), Some(ScanResultStatus::StatusOk));
+
+        let forcedentry = Path::new("tests/samples/FORCEDENTRY.gif");
+        assert_eq!(scan_glyph_ttf_file(forcedentry).ok(), Some(ScanResultStatus::StatusOk));
     }
 
     #[test]
